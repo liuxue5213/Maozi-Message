@@ -30,6 +30,13 @@ jobs:
           channel: 'stable'
           cache: true
 
+      - name: Create local.properties
+        working-directory: ./mobile/android
+        run: |
+          echo "flutter.sdk=$FLUTTER_ROOT" > local.properties
+          echo "sdk.dir=$ANDROID_SDK_ROOT" >> local.properties
+          cat local.properties
+
       - name: Install Flutter dependencies
         working-directory: ./mobile
         run: flutter pub get
