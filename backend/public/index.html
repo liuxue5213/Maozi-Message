@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>猫子留言 - 弹幕展示</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0a0a1a;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      height: 100vh; width: 100vw;
+    }
+    .stars { position: fixed; inset: 0; z-index: 0;
+      background: radial-gradient(ellipse at center, #1a1a3e 0%, #0a0a1a 100%); }
+    #barrage-container { position: fixed; inset: 0; z-index: 1; pointer-events: none; }
+    .barrage-item {
+      position: absolute; white-space: nowrap; padding: 8px 16px;
+      border-radius: 20px; font-size: 16px; color: #fff;
+      cursor: pointer; pointer-events: auto;
+      display: flex; align-items: center; gap: 6px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3); user-select: none; max-width: 60vw;
+      will-change: transform;
+      backface-visibility: hidden;
+      -webkit-backface-visibility: hidden;
+    }
+    .barrage-item:hover { opacity: 0.85; }
+    .barrage-item .mood-icon { font-size: 14px; }
+    .barrage-item .author { font-size: 12px; opacity: 0.7; }
+    #control-bar {
+      position: fixed; bottom: 0; left: 0; right: 0; z-index: 10;
+      background: rgba(10,10,26,0.95); backdrop-filter: blur(10px);
+      padding: 12px 16px; display: flex; align-items: center; gap: 12px;
+      border-top: 1px solid rgba(255,255,255,0.1);
+    }
+    #message-input {
+      flex: 1; padding: 10px 16px; border-radius: 24px;
+      border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.08);
+      color: #fff; font-size: 15px; outline: none;
+    }
+    #message-input:focus { border-color: #48dbfb; }
+    #message-input::placeholder { color: rgba(255,255,255,0.4); }
+    #send-btn {
+      padding: 10px 20px; border-radius: 24px; border: none;
+      background: linear-gradient(135deg, #48dbfb, #0abde3);
+      color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; white-space: nowrap;
+    }
+    #send-btn:active { transform: scale(0.95); }
+    #send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    #stats {
+      position: fixed; top: 12px; left: 16px; z-index: 10;
+      color: rgba(255,255,255,0.6); font-size: 13px;
+      background: rgba(0,0,0,0.4); padding: 6px 12px; border-radius: 12px;
+    }
+    #ws-status {
+      position: fixed; top: 12px; right: 16px; z-index: 10;
+      font-size: 12px; padding: 4px 10px; border-radius: 10px;
+    }
+    #ws-status.connected { background: rgba(16,172,132,0.25); color: #10ac84; }
+    #ws-status.disconnected { background: rgba(255,107,107,0.25); color: #ff6b6b; }
+    #detail-modal {
+      position: fixed; inset: 0; z-index: 100;
+      background: rgba(0,0,0,0.7); backdrop-filter: blur(4px);
+      display: none; align-items: center; justify-content: center;
+    }
+    #detail-modal.active { display: flex; }
+    .modal-content {
+      background: #1e1e3a; border-radius: 16px; width: 90%; max-width: 420px;
+      max-height: 80vh; overflow-y: auto; padding: 20px; color: #fff;
+    }
+    .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+    .modal-header h3 { font-size: 16px; }
+    .modal-close { background: none; border: none; color: rgba(255,255,255,0.5); font-size: 20px; cursor: pointer; }
+    .modal-loading { text-align: center; padding: 40px 0; color: rgba(255,255,255,0.4); }
+    .modal-error { text-align: center; padding: 20px; color: #ff6b6b; font-size: 14px; }
+    .detail-message { background: rgba(255,255,255,0.06); border-radius: 12px; padding: 14px; margin-bottom: 12px; }
+    .detail-message .author { font-size: 12px; opacity: 0.6; margin-bottom: 6px; }
+    .detail-message .content { font-size: 16px; line-height: 1.6; }
+    .vote-section { display: flex; gap: 10px; margin: 10px 0; }
+    .vote-btn {
+      display: flex; align-items: center; gap: 6px; padding: 6px 14px;
+      border-radius: 20px; background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.1); color: rgba(255,255,255,0.8);
+      font-size: 13px; cursor: pointer; transition: all 0.2s;
+    }
+    .vote-btn:hover { background: rgba(255,255,255,0.12); }
+    .vote-btn.like.active { background: rgba(16,172,132,0.25); border-color: #10ac84; color: #10ac84; }
+    .vote-btn.dislike.active { background: rgba(255,107,107,0.25); border-color: #ff6b6b; color: #ff6b6b; }
+    .reply-list { margin-bottom: 12px; }
+    .reply-item { background: rgba(255,255,255,0.04); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; font-size: 14px; }
+    .reply-item .author { opacity: 0.6; font-size: 11px; margin-bottom: 4px; }
+    .reply-item .content { line-height: 1.5; }
+    .reply-item .actions { display: flex; gap: 8px; margin-top: 6px; }
+    .reply-item .actions button {
+      background: rgba(255,255,255,0.08); border: none;
+      color: rgba(255,255,255,0.7); padding: 4px 10px;
+      border-radius: 6px; font-size: 11px; cursor: pointer;
+    }
+    .reply-item .actions button.active { background: rgba(72,219,251,0.2); color: #48dbfb; }
+    .reply-input-area { display: flex; gap: 8px; align-items: center; background: rgba(255,255,255,0.04); border-radius: 12px; padding: 8px; }
+    .reply-input-area input { flex: 1; background: none; border: none; color: #fff; font-size: 14px; outline: none; }
+    .reply-input-area input::placeholder { color: rgba(255,255,255,0.3); }
+    .reply-input-area button { padding: 8px 16px; border-radius: 8px; border: none; background: #48dbfb; color: #fff; font-size: 13px; cursor: pointer; }
+    .reply-input-area .error-msg { color: #ff6b6b; font-size: 12px; margin-top: 4px; }
+    #empty-state { position: fixed; inset: 0; z-index: 5; display: flex; flex-direction: column; align-items: center; justify-content: center; color: rgba(255,255,255,0.4); font-size: 15px; gap: 12px; }
+    #empty-state.hidden { display: none; }
+    #empty-state .icon { font-size: 48px; }
+    #track-indicators { position: fixed; right: 8px; top: 50%; transform: translateY(-50%); z-index: 8; display: flex; flex-direction: column; gap: 6px; }
+    .track-dot { width: 8px; height: 8px; border-radius: 50%; background: rgba(255,255,255,0.15); transition: background 0.3s; }
+    .track-dot.active { background: #48dbfb; box-shadow: 0 0 8px rgba(72,219,251,0.5); }
+    #auth-modal {
+      position: fixed; inset: 0; z-index: 200;
+      background: rgba(0,0,0,0.7); backdrop-filter: blur(4px);
+      display: none; align-items: center; justify-content: center;
+    }
+    #auth-modal.active { display: flex; }
+    .auth-tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+    .auth-tab {
+      flex: 1; padding: 8px; border: none; border-radius: 8px;
+      background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.6);
+      cursor: pointer; font-size: 14px; transition: all 0.2s;
+    }
+    .auth-tab.active { background: rgba(72,219,251,0.2); color: #48dbfb; }
+    #auth-fields input {
+      width: 100%; padding: 10px 14px; margin-bottom: 10px;
+      border-radius: 10px; border: 1px solid rgba(255,255,255,0.15);
+      background: rgba(255,255,255,0.06); color: #fff; font-size: 14px;
+      outline: none; box-sizing: border-box;
+    }
+    #auth-fields input:focus { border-color: #48dbfb; }
+    .auth-error { color: #ff6b6b; font-size: 12px; min-height: 18px; margin-bottom: 6px; }
+    .auth-submit {
+      width: 100%; padding: 10px; border: none; border-radius: 10px;
+      background: #48dbfb; color: #fff; font-size: 15px;
+      font-weight: 600; cursor: pointer;
+    }
+    .auth-submit:active { transform: scale(0.97); }
+    #user-info {
+      display: flex; align-items: center; gap: 8px;
+      padding: 6px 12px; border-radius: 20px;
+      background: rgba(255,255,255,0.08); cursor: pointer;
+      transition: background 0.2s;
+    }
+    #user-info:hover { background: rgba(255,255,255,0.15); }
+    #user-avatar {
+      width: 28px; height: 28px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 13px; font-weight: 600; color: #fff;
+    }
+    #user-name { font-size: 13px; color: rgba(255,255,255,0.8); max-width: 80px; overflow: hidden; text-overflow: ellipsis; }
+  </style>
+</head>
+<body>
+  <div class="stars"></div>
+  <div id="stats">📊 今日: <span id="today-count">0</span> 条 | 总计: <span id="total-count">0</span> 条</div>
+  <div id="ws-status" class="disconnected">🔴 离线</div>
+  <div id="track-indicators">
+    <div class="track-dot" data-track="0"></div><div class="track-dot" data-track="1"></div>
+    <div class="track-dot" data-track="2"></div><div class="track-dot" data-track="3"></div>
+    <div class="track-dot" data-track="4"></div>
+  </div>
+  <div id="barrage-container"></div>
+  <div id="empty-state"><div class="icon">💬</div><div>今天还没有留言，快来抢沙发！</div></div>
+  <div id="detail-modal">
+    <div class="modal-content">
+      <div class="modal-header"><h3>留言详情</h3><button class="modal-close" onclick="closeDetail()">&times;</button></div>
+      <div id="detail-body"></div>
+    </div>
+  </div>
+  <!-- 登录/注册弹窗 -->
+  <div id="auth-modal">
+    <div class="modal-content" style="max-width:360px;">
+      <div class="modal-header">
+        <h3 id="auth-title">登录</h3>
+        <button class="modal-close" onclick="closeAuth()">&times;</button>
+      </div>
+      <div id="auth-body">
+        <div class="auth-tabs">
+          <button class="auth-tab active" onclick="switchAuthTab('login')">登录</button>
+          <button class="auth-tab" onclick="switchAuthTab('register')">注册</button>
+        </div>
+        <div id="auth-fields">
+          <input type="text" id="auth-username" placeholder="用户名" maxlength="20" />
+          <input type="password" id="auth-password" placeholder="密码" maxlength="30" />
+          <input type="text" id="auth-nickname" placeholder="昵称" maxlength="20" style="display:none;" />
+          <div id="auth-error" class="auth-error"></div>
+          <button class="auth-submit" onclick="submitAuth()">登录</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="control-bar">
+    <div id="user-info" onclick="showAuth()">
+      <span id="user-avatar">?</span>
+      <span id="user-name">点击登录</span>
+    </div>
+    <input type="text" id="message-input" placeholder="说点什么..." maxlength="500" />
+    <button id="send-btn" onclick="sendMessage()">发送</button>
+  </div>
+
+  <script>
+    const API_BASE = window.location.origin;
+    const TRACK_COUNT = 5;
+    const MAX_ON_SCREEN = 5;
+    const SCROLL_DURATION = 15000;
+    const MIN_GAP_MS = 3000;
+    const FILL_THRESHOLD = 15;
+    const DEFAULT_MESSAGES = [
+      '今天天气真好 ☀️', '路过... 有猫吗？🐱', '刚看完一部电影，推荐！',
+      '下班好累 😫', '来都来了，留句话吧~', '今天有什么想说的？',
+      '有人在吗？打个招呼 👋', '午饭吃什么好呢 🍜', '晚安，明天见 🌙',
+      '突然想喝奶茶 🧋', '这个地方好安静', '今天的心情是蓝色',
+    ];
+    const MOOD_ICONS = { happy:'😊', neutral:'😐', sad:'😢', angry:'😤', excited:'🤩', calm:'😌' };
+
+    let allMessages = [], displayQueue = [], activeBarrages = [], currentTrack = 0, isDisplaying = false, lastDisplayTime = 0;
+    let displayedIds = new Set();
+    let ws = null;
+    let authMode = 'login';
+    let currentUser = null;
+    let authToken = localStorage.getItem('mz_token') || null;
+
+    // === 认证相关 ===
+    function showAuth() {
+      if (currentUser) { logout(); return; }
+      document.getElementById('auth-modal').classList.add('active');
+      document.getElementById('auth-error').textContent = '';
+    }
+    function closeAuth() { document.getElementById('auth-modal').classList.remove('active'); }
+    function switchAuthTab(mode) {
+      authMode = mode;
+      document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+      event.target.classList.add('active');
+      document.getElementById('auth-title').textContent = mode === 'login' ? '登录' : '注册';
+      document.getElementById('auth-nickname').style.display = mode === 'register' ? '' : 'none';
+      document.querySelector('.auth-submit').textContent = mode === 'login' ? '登录' : '注册';
+      document.getElementById('auth-error').textContent = '';
+    }
+    async function submitAuth() {
+      const username = document.getElementById('auth-username').value.trim();
+      const password = document.getElementById('auth-password').value;
+      const nickname = document.getElementById('auth-nickname').value.trim();
+      const errEl = document.getElementById('auth-error');
+      errEl.textContent = '';
+      if (!username || !password) { errEl.textContent = '请填写用户名和密码'; return; }
+      try {
+        const body = { username, password };
+        if (authMode === 'register') {
+          if (!nickname) { errEl.textContent = '请填写昵称'; return; }
+          body.nickname = nickname;
+        }
+        const res = await fetch(`${API_BASE}/api/auth/${authMode}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (data.success) {
+          authToken = data.data.token;
+          currentUser = data.data.user;
+          localStorage.setItem('mz_token', authToken);
+          closeAuth();
+          updateUserUI();
+        } else {
+          errEl.textContent = data.error || '操作失败';
+        }
+      } catch (e) { errEl.textContent = '网络错误，请重试'; }
+    }
+    function logout() {
+      authToken = null;
+      currentUser = null;
+      localStorage.removeItem('mz_token');
+      updateUserUI();
+    }
+    function updateUserUI() {
+      const avatar = document.getElementById('user-avatar');
+      const name = document.getElementById('user-name');
+      if (currentUser) {
+        avatar.textContent = currentUser.nickname.charAt(0);
+        avatar.style.background = currentUser.avatar_color;
+        name.textContent = currentUser.nickname;
+      } else {
+        avatar.textContent = '?';
+        avatar.style.background = '#555';
+        name.textContent = '点击登录';
+      }
+    }
+    async function checkAuth() {
+      if (!authToken) { updateUserUI(); return; }
+      try {
+        const res = await fetch(`${API_BASE}/api/auth/me`, {
+          headers: { 'Authorization': 'Bearer ' + authToken },
+        });
+        const data = await res.json();
+        if (data.success) { currentUser = data.data; updateUserUI(); }
+        else { logout(); }
+      } catch (_) { logout(); }
+    }
+    function getAuthHeaders() {
+      const h = { 'Content-Type': 'application/json' };
+      if (authToken) h['Authorization'] = 'Bearer ' + authToken;
+      return h;
+    }
+
+    function getFingerprint() {
+      let fp = localStorage.getItem('mz_fp');
+      if (!fp) { fp = Math.random().toString(36).substring(2) + Date.now().toString(36); localStorage.setItem('mz_fp', fp); }
+      return fp;
+    }
+
+    function escapeHtml(str) { const d = document.createElement('div'); d.textContent = str; return d.innerHTML; }
+    function formatTime(t) { const d = new Date(t); return `${d.getMonth()+1}/${d.getDate()} ${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`; }
+
+    // === WebSocket ===
+    function connectWS() {
+      const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${wsProtocol}//${location.host}/ws`);
+      ws.onopen = () => {
+        document.getElementById('ws-status').className = 'connected';
+        document.getElementById('ws-status').textContent = '🟢 实时';
+      };
+      ws.onclose = () => {
+        document.getElementById('ws-status').className = 'disconnected';
+        document.getElementById('ws-status').textContent = '🔴 离线';
+        setTimeout(connectWS, 3000);
+      };
+      ws.onmessage = (e) => {
+        try {
+          const { type, data } = JSON.parse(e.data);
+          if (type === 'new_message') {
+            allMessages.unshift(data);
+            displayQueue.unshift(data);
+            document.getElementById('empty-state').classList.add('hidden');
+          } else if (type === 'new_reply') {
+            const msg = allMessages.find(m => m.id === data.message_id);
+            if (msg) msg.replies = msg.replies || [];
+            msg.replies.push(data.reply);
+          } else if (type === 'message_deleted') {
+            allMessages = allMessages.filter(m => m.id !== data.id);
+            displayQueue = displayQueue.filter(m => m.id !== data.id);
+          }
+          loadStats();
+        } catch (_) {}
+      };
+    }
+
+    async function loadMessages() {
+      try {
+        const res = await fetch(`${API_BASE}/api/messages?limit=100`);
+        const data = await res.json();
+        if (data.success) {
+          allMessages = data.data;
+          document.getElementById('empty-state').classList.toggle('hidden', allMessages.length > 0);
+        }
+      } catch (e) { console.error('加载消息失败:', e); }
+    }
+
+    async function loadStats() {
+      try {
+        const res = await fetch(`${API_BASE}/api/stats`);
+        const data = await res.json();
+        if (data.success) {
+          document.getElementById('today-count').textContent = data.data.todayMessages;
+          document.getElementById('total-count').textContent = data.data.totalMessages;
+        }
+      } catch (e) { console.error('加载统计失败:', e); }
+    }
+
+    function ensureMinMessages() {
+      if (allMessages.length >= FILL_THRESHOLD) return;
+      const fillCount = FILL_THRESHOLD - allMessages.length;
+      for (let i = 0; i < fillCount; i++) {
+        allMessages.push({
+          id: 'default_' + i, content: DEFAULT_MESSAGES[Math.floor(Math.random() * DEFAULT_MESSAGES.length)],
+          author_name: '匿名', color: '#c8d6e5', bg_color: 'rgba(255,255,255,0.08)',
+          mood: 'neutral', replies: [], created_at: new Date().toISOString(),
+        });
+      }
+    }
+
+    function initDisplayQueue() {
+      ensureMinMessages();
+      // 清理已显示过的 ID（保留最近 50 条防重复）
+      if (displayedIds.size > 50) {
+        const arr = [...displayedIds];
+        displayedIds = new Set(arr.slice(arr.length - 50));
+      }
+      // 只显示尚未显示过的留言
+      displayQueue = allMessages.filter(m => !displayedIds.has(m.id)).sort(() => Math.random() - 0.5);
+      startDisplayLoop();
+    }
+
+    function getAvailableTrack() {
+      const busyTracks = activeBarrages.map(b => b.track);
+      const available = Array.from({length: TRACK_COUNT}, (_, i) => i).filter(t => !busyTracks.includes(t));
+      if (available.length > 0) return available[Math.floor(Math.random() * available.length)];
+      currentTrack = (currentTrack + 1) % TRACK_COUNT;
+      return currentTrack;
+    }
+
+    function launchBarrage(message) {
+      const track = getAvailableTrack();
+      const trackHeight = (window.innerHeight - 100) / TRACK_COUNT; // 底部留 100px 给输入栏
+      const y = track * trackHeight + trackHeight / 2 - 20;
+      const el = document.createElement('div');
+      el.className = 'barrage-item';
+      el.style.top = y + 'px';
+      el.style.left = window.innerWidth + 'px';
+      el.style.background = message.bg_color || 'rgba(0,0,0,0.6)';
+      el.style.color = message.color || '#fff';
+      el.dataset.id = message.id;
+      el.innerHTML = `<span class="mood-icon">${MOOD_ICONS[message.mood]||''}</span>
+        <span class="content">${escapeHtml(message.content)}</span>
+        <span class="author">@${escapeHtml(message.author_name)}</span>`;
+      el.addEventListener('click', () => openDetail(message.id));
+      document.getElementById('barrage-container').appendChild(el);
+      const elWidth = el.offsetWidth;
+      const anim = el.animate([
+        { transform: 'translateX(0)' },
+        { transform: `translateX(-${window.innerWidth + elWidth + 20}px)` }
+      ], { duration: SCROLL_DURATION, easing: 'linear' });
+      activeBarrages.push({ id: message.id, track, el, anim });
+      updateTrackIndicators();
+      anim.onfinish = () => {
+        el.remove();
+        activeBarrages = activeBarrages.filter(b => b.id !== message.id);
+        updateTrackIndicators();
+        if (displayQueue.length > 0) setTimeout(launchNext, 500);
+      };
+    }
+
+    function launchNext() {
+      if (displayQueue.length === 0) { if (allMessages.length > 0) initDisplayQueue(); return; }
+      launchBarrage(displayQueue.shift());
+    }
+
+    function startDisplayLoop() {
+      if (isDisplaying) return;
+      isDisplaying = true;
+      function loop() {
+        const now = Date.now();
+        if (activeBarrages.length < MAX_ON_SCREEN && now - lastDisplayTime >= MIN_GAP_MS) {
+          launchNext(); lastDisplayTime = now;
+        }
+        if (displayQueue.length === 0 && activeBarrages.length === 0) {
+          isDisplaying = false;
+          setTimeout(async () => { await loadMessages(); initDisplayQueue(); }, 2000);
+          return;
+        }
+        setTimeout(loop, 200);
+      }
+      const burst = Math.min(3, displayQueue.length);
+      for (let i = 0; i < burst; i++) setTimeout(launchNext, i * 800);
+      lastDisplayTime = Date.now();
+      setTimeout(loop, 200);
+    }
+
+    function updateTrackIndicators() {
+      document.querySelectorAll('.track-dot').forEach(d => d.classList.remove('active'));
+      activeBarrages.forEach(b => {
+        const dot = document.querySelector(`.track-dot[data-track="${b.track}"]`);
+        if (dot) dot.classList.add('active');
+      });
+    }
+
+    async function sendMessage() {
+      const input = document.getElementById('message-input');
+      const btn = document.getElementById('send-btn');
+      const content = input.value.trim();
+      if (!content) return;
+      btn.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE}/api/messages`, {
+          method: 'POST', headers: getAuthHeaders(),
+          body: JSON.stringify({ content, mood: 'neutral' }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          input.value = '';
+          displayQueue.unshift({ ...data.data, replies: [] });
+          loadStats();
+        } else {
+          alert(data.error || '发送失败');
+        }
+      } catch (e) { alert('发送失败: ' + e.message); }
+      btn.disabled = false;
+    }
+
+    async function openDetail(id) {
+      const body = document.getElementById('detail-body');
+      body.innerHTML = '<div class="modal-loading">加载中...</div>';
+      document.getElementById('detail-modal').classList.add('active');
+      try {
+        const res = await fetch(`${API_BASE}/api/messages/${id}`);
+        const data = await res.json();
+        if (!data.success) { body.innerHTML = `<div class="modal-error">留言不存在或已删除</div>`; return; }
+        const msg = data.data;
+        body.innerHTML = `
+          <div class="detail-message">
+            <div class="author">${escapeHtml(msg.author_name)} · ${formatTime(msg.created_at)}</div>
+            <div class="content">${escapeHtml(msg.content)}</div>
+            <div class="vote-section">
+              <button class="vote-btn like ${msg.my_vote==='like'?'active':''}" onclick="vote('message','${id}','like')">👍 <span id="msg-likes">${msg.real_likes||0}</span></button>
+              <button class="vote-btn dislike ${msg.my_vote==='dislike'?'active':''}" onclick="vote('message','${id}','dislike')">👎 <span id="msg-dislikes">${msg.real_dislikes||0}</span></button>
+            </div>
+          </div>
+          <div class="reply-list" id="reply-list">
+            ${msg.replies.length===0?'<div style="opacity:0.4;font-size:13px;margin:8px 0;">暂无回复，来说两句~</div>':''}
+            ${msg.replies.map(r=>`<div class="reply-item">
+              <div class="author">${escapeHtml(r.author_name)} · ${formatTime(r.created_at)}</div>
+              <div class="content">${escapeHtml(r.content)}</div>
+              <div class="actions">
+                <button class="${r.my_vote==='like'?'active':''}" onclick="vote('reply','${r.id}','like')">👍 <span id="reply-${r.id}-likes">${r.real_likes||0}</span></button>
+                <button class="${r.my_vote==='dislike'?'active':''}" onclick="vote('reply','${r.id}','dislike')">👎 <span id="reply-${r.id}-dislikes">${r.real_dislikes||0}</span></button>
+              </div></div>`).join('')}
+          </div>
+          <div class="reply-input-area">
+            <input type="text" id="reply-input" placeholder="回复..." maxlength="500" />
+            <button onclick="sendReply('${id}')">发送</button>
+            <div id="reply-error"></div>
+          </div>`;
+      } catch (e) { body.innerHTML = `<div class="modal-error">加载失败，请重试</div>`; }
+    }
+
+    function closeDetail() { document.getElementById('detail-modal').classList.remove('active'); }
+
+    async function sendReply(messageId) {
+      const input = document.getElementById('reply-input');
+      const errEl = document.getElementById('reply-error');
+      errEl.textContent = '';
+      const content = input.value.trim();
+      if (!content) return;
+      try {
+        const res = await fetch(`${API_BASE}/api/messages/${messageId}/reply`, {
+          method: 'POST', headers: getAuthHeaders(),
+          body: JSON.stringify({ content }),
+        });
+        const data = await res.json();
+        if (data.success) { input.value = ''; openDetail(messageId); loadMessages(); }
+        else { errEl.textContent = data.error || '回复失败'; }
+      } catch (e) { errEl.textContent = '网络错误，请重试'; }
+    }
+
+    async function vote(type, id, voteType) {
+      try {
+        const res = await fetch(`${API_BASE}/api/${type==='message'?'messages':'replies'}/${id}/vote`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ vote_type: voteType }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          if (type === 'message') {
+            document.getElementById('msg-likes').textContent = data.data.likes;
+            document.getElementById('msg-dislikes').textContent = data.data.dislikes;
+            document.querySelectorAll('.vote-section .vote-btn').forEach((b,i) => {
+              b.classList.toggle('active', i===0?data.data.my_vote==='like':data.data.my_vote==='dislike');
+            });
+          } else {
+            const el = document.getElementById(`reply-${id}-likes`);
+            if (el) el.textContent = data.data.likes;
+            const el2 = document.getElementById(`reply-${id}-dislikes`);
+            if (el2) el2.textContent = data.data.dislikes;
+          }
+        }
+      } catch (e) { console.error('投票失败:', e); }
+    }
+
+    document.getElementById('message-input').addEventListener('keypress', e => { if (e.key==='Enter') sendMessage(); });
+    document.getElementById('detail-modal').addEventListener('click', e => { if (e.target===document.getElementById('detail-modal')) closeDetail(); });
+    window.addEventListener('resize', () => { activeBarrages.forEach(b=>b.anim.cancel()); activeBarrages.forEach(b=>b.el.remove()); activeBarrages=[]; });
+
+    (async function init() {
+      await checkAuth();
+      await loadMessages(); loadStats(); initDisplayQueue(); connectWS();
+      setInterval(async () => { await loadMessages(); loadStats(); }, 30000);
+    })();
+  </script>
+</body>
+</html>
