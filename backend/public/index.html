@@ -205,8 +205,16 @@
     const TRACK_COUNT = 5;
     const MAX_ON_SCREEN = 5;
     const SCROLL_DURATION = 15000;
-    const MIN_GAP_MS = 3000;
     const FILL_THRESHOLD = 15;
+
+    // 动态间隔：数据少时快放，数据多时慢放
+    function calcGap() {
+      const n = allMessages.length;
+      if (n <= 5) return 800;       // 5 条以下：0.8 秒间隔
+      if (n <= 15) return 1500;     // 5-15 条：1.5 秒
+      if (n <= 30) return 2500;     // 15-30 条：2.5 秒
+      return 3500;                   // 30+ 条：3.5 秒
+    }
     const DEFAULT_MESSAGES = [
       '今天天气真好 ☀️', '路过... 有猫吗？🐱', '刚看完一部电影，推荐！',
       '下班好累 😫', '来都来了，留句话吧~', '今天有什么想说的？',
@@ -426,7 +434,8 @@
         el.remove();
         activeBarrages = activeBarrages.filter(b => b.id !== message.id);
         updateTrackIndicators();
-        if (displayQueue.length > 0) setTimeout(launchNext, 500);
+        // 立刻发射下一条，不等
+        if (displayQueue.length > 0) setTimeout(launchNext, 200);
       };
     }
 
@@ -440,20 +449,21 @@
       isDisplaying = true;
       function loop() {
         const now = Date.now();
-        if (activeBarrages.length < MAX_ON_SCREEN && now - lastDisplayTime >= MIN_GAP_MS) {
+        const gap = calcGap();
+        if (activeBarrages.length < MAX_ON_SCREEN && now - lastDisplayTime >= gap) {
           launchNext(); lastDisplayTime = now;
         }
         if (displayQueue.length === 0 && activeBarrages.length === 0) {
           isDisplaying = false;
-          setTimeout(async () => { await loadMessages(); initDisplayQueue(); }, 2000);
+          setTimeout(async () => { displayedIds.clear(); await loadMessages(); initDisplayQueue(); }, 500);
           return;
         }
-        setTimeout(loop, 200);
+        setTimeout(loop, 100);
       }
       const burst = Math.min(3, displayQueue.length);
-      for (let i = 0; i < burst; i++) setTimeout(launchNext, i * 800);
-      lastDisplayTime = Date.now();
-      setTimeout(loop, 200);
+      for (let i = 0; i < burst; i++) setTimeout(launchNext, i * 400);
+      lastDisplayTime = Date.now() - calcGap();
+      setTimeout(loop, 100);
     }
 
     function updateTrackIndicators() {

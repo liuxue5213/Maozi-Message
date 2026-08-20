@@ -29,12 +29,21 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   static const int _trackCount = 5;
   static const int _maxOnScreen = 5;
   static const Duration _scrollDuration = Duration(seconds: 15);
-  static const Duration _minGap = Duration(seconds: 3);
+
+  // 动态间隔：数据少时快放，数据多时慢放
+  Duration _calcGap() {
+    final n = _allMessages.length;
+    if (n <= 5) return const Duration(milliseconds: 800);
+    if (n <= 15) return const Duration(milliseconds: 1500);
+    if (n <= 30) return const Duration(milliseconds: 2500);
+    return const Duration(milliseconds: 3500);
+  }
 
   // 单控制器 + Stopwatch 计时
   late final Ticker _ticker;
   final _stopwatch = Stopwatch();
   double _screenWidth = 0;
+  int _lastLaunchTimeMs = 0;
 
   @override
   void initState() {
@@ -122,17 +131,17 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   void _startScheduler() {
     _schedulerTimer?.cancel();
-    _schedulerTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
+    _schedulerTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
       _scheduleNext();
     });
 
     // 启动计时器
     if (!_stopwatch.isRunning) _stopwatch.start();
 
-    // 初始同时发射2-3条
+    // 初始同时发射 2-3 条
     final burst = min(3, _displayQueue.length);
     for (int i = 0; i < burst; i++) {
-      Future.delayed(Duration(milliseconds: i * 600), () {
+      Future.delayed(Duration(milliseconds: i * 400), () {
         if (mounted) _launchBarrage();
       });
     }
@@ -140,7 +149,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   void _scheduleNext() {
     if (!mounted) return;
-    if (_activeBarrages.length < _maxOnScreen && _displayQueue.isNotEmpty) {
+    final now = _stopwatch.elapsedMilliseconds;
+    final gapMs = _calcGap().inMilliseconds;
+    if (_activeBarrages.length < _maxOnScreen && _displayQueue.isNotEmpty && now - _lastLaunchTimeMs >= gapMs) {
       _launchBarrage();
     }
   }
@@ -151,6 +162,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     final msg = _displayQueue.removeAt(0);
     final track = _getAvailableTrack();
     final startTimeMs = _stopwatch.elapsedMilliseconds;
+    _lastLaunchTimeMs = startTimeMs;
 
     setState(() => _activeBarrages.add(_ActiveBarrage(
       message: msg,
@@ -161,13 +173,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     // 启动 Ticker（如果还没启动）
     if (!_ticker.isActive) _ticker.start();
 
-    // 队列还有就继续
+    // 队列还有就立刻继续，不等
     if (_displayQueue.isNotEmpty) {
-      Future.delayed(const Duration(seconds: 1), () {
+      Future.delayed(const Duration(milliseconds: 200), () {
         if (mounted) _launchBarrage();
       });
     } else if (_activeBarrages.isEmpty) {
-      Future.delayed(const Duration(seconds: 2), () {
+      Future.delayed(const Duration(milliseconds: 500), () {
         if (mounted) _initDisplayQueue();
       });
     }
