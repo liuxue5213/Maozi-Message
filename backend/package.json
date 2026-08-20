@@ -1,7 +1,7 @@
 {
   "name": "maozi-message-backend",
   "version": "1.0.0",
-  "description": "猫子留言 - 后端API服务",
+  "description": "帽子留言 - 后端API服务",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

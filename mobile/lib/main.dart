@@ -12,7 +12,7 @@ class MaoziMessageApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: '猫子留言',
+      title: '帽子留言',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,

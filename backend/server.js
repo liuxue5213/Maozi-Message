@@ -79,7 +79,7 @@ app.get('*', (req, res) => {
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 猫子留言后端服务已启动: http://localhost:${PORT}`);
+  console.log(`🚀 帽子留言后端服务已启动: http://localhost:${PORT}`);
   console.log(`📺 弹幕展示页: http://localhost:${PORT}`);
   console.log(`📡 API 地址: http://localhost:${PORT}/api`);
   console.log(`🔌 WebSocket: ws://localhost:${PORT}/ws`);
