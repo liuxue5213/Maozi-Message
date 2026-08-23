@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
-import 'package:flutter/scheduler.dart';
 import '../models/message.dart';
 import '../services/api_service.dart';
 import '../widgets/barrage_item.dart';
