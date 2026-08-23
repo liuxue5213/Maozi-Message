@@ -18,6 +18,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   List<Message> _allMessages = [];
   List<Message> _displayQueue = [];
   List<_ActiveBarrage> _activeBarrages = [];
+  final Set<String> _displayedIds = {};
   bool _loading = true;
   String? _error;
   Timer? _refreshTimer;
@@ -125,7 +126,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
   void _initDisplayQueue() {
-    _displayQueue = [..._allMessages]..shuffle();
+    // 排除已在队列中或正在显示的留言
+    final existingIds = _displayQueue.map((m) => m.id).toSet();
+    for (final b in _activeBarrages) existingIds.add(b.id);
+    final newMessages = _allMessages.where((m) => !_displayedIds.contains(m.id) && !existingIds.contains(m.id)).toList();
+    _displayQueue = [..._displayQueue, ...newMessages]..shuffle();
     _startScheduler();
   }
 
@@ -160,6 +165,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     if (_displayQueue.isEmpty || !mounted) return;
 
     final msg = _displayQueue.removeAt(0);
+    _displayedIds.add(msg.id); // 记录已显示
     final track = _getAvailableTrack();
     final startTimeMs = _stopwatch.elapsedMilliseconds;
     _lastLaunchTimeMs = startTimeMs;

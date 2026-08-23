@@ -394,8 +394,11 @@
         const arr = [...displayedIds];
         displayedIds = new Set(arr.slice(arr.length - 50));
       }
-      // 只显示尚未显示过的留言
-      displayQueue = allMessages.filter(m => !displayedIds.has(m.id)).sort(() => Math.random() - 0.5);
+      // 排除已在队列中或正在显示的留言
+      const existingIds = new Set(displayQueue.map(m => m.id));
+      activeBarrages.forEach(b => existingIds.add(b.id));
+      const newMessages = allMessages.filter(m => !displayedIds.has(m.id) && !existingIds.has(m.id));
+      displayQueue = [...displayQueue, ...newMessages].sort(() => Math.random() - 0.5);
       startDisplayLoop();
     }
 
@@ -408,6 +411,7 @@
     }
 
     function launchBarrage(message) {
+      displayedIds.add(message.id); // 记录已显示的 ID
       const track = getAvailableTrack();
       const trackHeight = (window.innerHeight - 100) / TRACK_COUNT; // 底部留 100px 给输入栏
       const y = track * trackHeight + trackHeight / 2 - 20;
@@ -504,7 +508,30 @@
       try {
         const res = await fetch(`${API_BASE}/api/messages/${id}`);
         const data = await res.json();
-        if (!data.success) { body.innerHTML = `<div class="modal-error">留言不存在或已删除</div>`; return; }
+        if (!data.success) {
+          // 查不到就从本地数据里取（默认填充的留言）
+          const localMsg = allMessages.find(m => m.id === id);
+          if (localMsg) {
+            body.innerHTML = `
+              <div class="detail-message">
+                <div class="author">${escapeHtml(localMsg.author_name)} · ${formatTime(localMsg.created_at)}</div>
+                <div class="content">${escapeHtml(localMsg.content)}</div>
+                <div class="vote-section">
+                  <button class="vote-btn like" onclick="vote('message','${id}','like')">👍 <span>0</span></button>
+                  <button class="vote-btn dislike" onclick="vote('message','${id}','dislike')">👎 <span>0</span></button>
+                </div>
+              </div>
+              <div class="reply-list"><div style="opacity:0.4;font-size:13px;margin:8px 0;">暂无回复</div></div>
+              <div class="reply-input-area">
+                <input type="text" id="reply-input" placeholder="回复..." maxlength="500" />
+                <button onclick="sendReply('${id}')">发送</button>
+                <div id="reply-error"></div>
+              </div>`;
+            return;
+          }
+          body.innerHTML = `<div class="modal-error">留言不存在或已删除</div>`;
+          return;
+        }
         const msg = data.data;
         body.innerHTML = `
           <div class="detail-message">
