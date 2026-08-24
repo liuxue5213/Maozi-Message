@@ -67,13 +67,16 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     if (_activeBarrages.isNotEmpty) {
       final now = _stopwatch.elapsedMilliseconds;
       final scrollMs = _scrollDuration.inMilliseconds;
-      final before = _activeBarrages.length;
       _activeBarrages.removeWhere((b) => now - b.startTimeMs > scrollMs);
-      if (_activeBarrages.isEmpty && _displayQueue.isEmpty) {
-        _ticker.stop();
-        _stopwatch.stop();
-      }
-      if (_activeBarrages.length != before) setState(() {});
+    }
+    // 一轮播完：清空已显示记录并重新排队，保证无限循环
+    if (_activeBarrages.isEmpty && _displayQueue.isEmpty) {
+      _ticker.stop();
+      _stopwatch.stop();
+      _displayedIds.clear();
+      Future.delayed(const Duration(milliseconds: 500), () {
+        if (mounted) _initDisplayQueue();
+      });
     }
     setState(() {});
   }
@@ -163,6 +166,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   void _launchBarrage() {
     if (_displayQueue.isEmpty || !mounted) return;
+    // 屏显上限保护，防止同轨道叠加
+    if (_activeBarrages.length >= _maxOnScreen) return;
 
     final msg = _displayQueue.removeAt(0);
     _displayedIds.add(msg.id); // 记录已显示
@@ -178,17 +183,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
     // 启动 Ticker（如果还没启动）
     if (!_ticker.isActive) _ticker.start();
-
-    // 队列还有就立刻继续，不等
-    if (_displayQueue.isNotEmpty) {
-      Future.delayed(const Duration(milliseconds: 200), () {
-        if (mounted) _launchBarrage();
-      });
-    } else if (_activeBarrages.isEmpty) {
-      Future.delayed(const Duration(milliseconds: 500), () {
-        if (mounted) _initDisplayQueue();
-      });
-    }
+    // 后续发射统一由 _scheduleNext 按动态间隔调度，这里不做链式触发
   }
 
   int _getAvailableTrack() {
@@ -413,15 +408,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
   List<Widget> _buildBarrageLayers() {
-    if (_screenWidth == 0) _screenWidth = MediaQuery.of(context).size.width;
+    _screenWidth = MediaQuery.of(context).size.width;
     final screenH = MediaQuery.of(context).size.height;
     final trackHeight = (screenH - 120) / (_trackCount + 2);
     final now = _stopwatch.elapsedMilliseconds;
     final scrollMs = _scrollDuration.inMilliseconds;
 
-    // 过滤已完成的弹幕
-    _activeBarrages.removeWhere((b) => now - b.startTimeMs > scrollMs);
-
+    // 只渲染仍在飞行中的弹幕（清理在 _onTick 中进行）
     return _activeBarrages.map((barrage) {
       final elapsed = now - barrage.startTimeMs;
       final progress = (elapsed / scrollMs).clamp(0.0, 1.0);

@@ -438,12 +438,12 @@
         el.remove();
         activeBarrages = activeBarrages.filter(b => b.id !== message.id);
         updateTrackIndicators();
-        // 立刻发射下一条，不等
-        if (displayQueue.length > 0) setTimeout(launchNext, 200);
       };
     }
 
     function launchNext() {
+      // 发射统一由主循环调度，这里加屏显上限保护防止叠加
+      if (activeBarrages.length >= MAX_ON_SCREEN) return;
       if (displayQueue.length === 0) { if (allMessages.length > 0) initDisplayQueue(); return; }
       launchBarrage(displayQueue.shift());
     }
