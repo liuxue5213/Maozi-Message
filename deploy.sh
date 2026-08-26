@@ -22,7 +22,7 @@ ssh $SERVER "cd $REMOTE_DIR && \
   npm install --production && \
   mkdir -p data && \
   (pm2 stop maozi-message 2>/dev/null || true) && \
-  pm2 start server.js --name maozi-message --env production && \
+  NODE_ENV=production pm2 start server.js --name maozi-message --update-env && \
   pm2 save && \
   echo '✅ 服务已启动'"
 
@@ -46,18 +46,6 @@ server {
     }
 }
 
-server {
-    listen 60175;
-    server_name _;
-
-    location / {
-        proxy_pass http://127.0.0.1:60175;
-        proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-    }
-}
 NGINX
   ln -sf /etc/nginx/sites-available/maozi-message /etc/nginx/sites-enabled/
   nginx -t && systemctl reload nginx

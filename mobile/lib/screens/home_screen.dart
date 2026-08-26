@@ -93,7 +93,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           _loading = false;
           _error = null;
         });
-        _ensureMinMessages();
         _initDisplayQueue();
       }
     } catch (e) {
@@ -103,28 +102,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           _loading = false;
         });
       }
-    }
-  }
-
-  void _ensureMinMessages() {
-    if (_allMessages.length >= 15) return;
-    const defaults = [
-      '今天天气真好 ☀️', '路过... 有猫吗？🐱', '刚看完一部电影，推荐！',
-      '下班好累 😫', '来都来了，留句话吧~', '今天有什么想说的？',
-      '有人在吗？打个招呼 👋', '午饭吃什么好呢 🍜', '晚安，明天见 🌙',
-      '突然想喝奶茶 🧋', '这个地方好安静', '今天的心情是蓝色',
-    ];
-    final fillCount = 15 - _allMessages.length;
-    final rng = Random();
-    for (int i = 0; i < fillCount; i++) {
-      _allMessages.add(Message(
-        id: 'default_$i',
-        content: defaults[rng.nextInt(defaults.length)],
-        authorName: 'Anonymous',
-        isAnonymous: true,
-        createdAt: DateTime.now().toIso8601String(),
-        replies: [],
-      ));
     }
   }
 

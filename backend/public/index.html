@@ -306,7 +306,7 @@
       } catch (_) { logout(); }
     }
     function getAuthHeaders() {
-      const h = { 'Content-Type': 'application/json' };
+      const h = { 'Content-Type': 'application/json', 'X-Fingerprint': getFingerprint() };
       if (authToken) h['Authorization'] = 'Bearer ' + authToken;
       return h;
     }
@@ -342,11 +342,27 @@
             document.getElementById('empty-state').classList.add('hidden');
           } else if (type === 'new_reply') {
             const msg = allMessages.find(m => m.id === data.message_id);
-            if (msg) msg.replies = msg.replies || [];
-            msg.replies.push(data.reply);
+            if (msg) {
+              msg.replies = msg.replies || [];
+              msg.replies.push(data.reply);
+            }
           } else if (type === 'message_deleted') {
             allMessages = allMessages.filter(m => m.id !== data.id);
             displayQueue = displayQueue.filter(m => m.id !== data.id);
+          } else if (type === 'vote_update') {
+            const target = data.target_type === 'message'
+              ? allMessages.find(m => m.id === data.target_id)
+              : allMessages.flatMap(m => m.replies || []).find(r => r.id === data.target_id);
+            if (target) {
+              target.real_likes = data.likes;
+              target.real_dislikes = data.dislikes;
+            }
+            const likes = document.getElementById(data.target_type === 'message'
+              ? 'msg-likes' : `reply-${data.target_id}-likes`);
+            const dislikes = document.getElementById(data.target_type === 'message'
+              ? 'msg-dislikes' : `reply-${data.target_id}-dislikes`);
+            if (likes) likes.textContent = data.likes;
+            if (dislikes) dislikes.textContent = data.dislikes;
           }
           loadStats();
         } catch (_) {}
@@ -355,7 +371,7 @@
 
     async function loadMessages() {
       try {
-        const res = await fetch(`${API_BASE}/api/messages?limit=100`);
+        const res = await fetch(`${API_BASE}/api/messages?limit=100`, { headers: getAuthHeaders() });
         const data = await res.json();
         if (data.success) {
           allMessages = data.data;
@@ -366,7 +382,7 @@
 
     async function loadStats() {
       try {
-        const res = await fetch(`${API_BASE}/api/stats`);
+        const res = await fetch(`${API_BASE}/api/stats`, { headers: getAuthHeaders() });
         const data = await res.json();
         if (data.success) {
           document.getElementById('today-count').textContent = data.data.todayMessages;
@@ -506,7 +522,7 @@
       body.innerHTML = '<div class="modal-loading">加载中...</div>';
       document.getElementById('detail-modal').classList.add('active');
       try {
-        const res = await fetch(`${API_BASE}/api/messages/${id}`);
+        const res = await fetch(`${API_BASE}/api/messages/${id}`, { headers: getAuthHeaders() });
         const data = await res.json();
         if (!data.success) {
           // 查不到就从本地数据里取（默认填充的留言）
@@ -582,7 +598,7 @@
     async function vote(type, id, voteType) {
       try {
         const res = await fetch(`${API_BASE}/api/${type==='message'?'messages':'replies'}/${id}/vote`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          method: 'POST', headers: getAuthHeaders(),
           body: JSON.stringify({ vote_type: voteType }),
         });
         const data = await res.json();

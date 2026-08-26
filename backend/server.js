@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const cors = require('cors');
@@ -8,7 +10,7 @@ const messagesRouter = require('./routes/messages');
 const authRouter = require('./routes/auth');
 
 const app = express();
-const PORT = 60175;
+const PORT = Number(process.env.PORT) || 60175;
 
 // 创建 HTTP 服务（WebSocket 需要）
 const server = http.createServer(app);
@@ -35,7 +37,11 @@ wss.on('connection', (ws) => {
 });
 
 // 中间件
-app.use(cors());
+const allowedOrigins = process.env.CORS_ORIGINS
+  ? process.env.CORS_ORIGINS.split(',').map(origin => origin.trim()).filter(Boolean)
+  : null;
+// Web 展示页与 API 同源；如有独立 Web 前端，再通过 CORS_ORIGINS 明确放行。
+app.use(cors({ origin: allowedOrigins || false }));
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
@@ -51,16 +57,24 @@ const apiLimiter = rateLimit({
 const postLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 20,                // 发布/回复/投票最多 20 次/分钟
+  skip: (req) => !['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method),
   message: { success: false, error: '操作过于频繁，稍后再试' },
 });
 
-// API 路由（挂载限速中间件）
-app.use('/api/auth', authRouter);
-app.use('/api', apiLimiter, messagesRouter);
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  skip: (req) => req.method !== 'POST',
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: '认证请求过于频繁，请稍后再试' },
+});
 
-// 对发布/回复/投票接口额外限速
+// API 路由。写操作的限流必须在路由处理器之前注册，否则不会执行。
+app.use('/api/auth', authLimiter, authRouter);
 app.use('/api/messages', postLimiter);
 app.use('/api/replies', postLimiter);
+app.use('/api', apiLimiter, messagesRouter);
 
 // 静态文件服务（Web前端弹幕页）
 app.use(express.static(path.join(__dirname, 'public')));
@@ -68,6 +82,13 @@ app.use(express.static(path.join(__dirname, 'public')));
 // 健康检查
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+app.use((err, req, res, next) => {
+  if (err instanceof SyntaxError && 'body' in err) {
+    return res.status(400).json({ success: false, error: '请求 JSON 格式无效' });
+  }
+  next(err);
 });
 
 // 兜底：所有未匹配的前端路由返回页面

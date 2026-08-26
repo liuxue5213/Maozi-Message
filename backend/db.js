@@ -1,6 +1,5 @@
 const Database = require('better-sqlite3');
 const path = require('path');
-const { v4: uuidv4 } = require('uuid');
 const crypto = require('crypto');
 
 const db = new Database(path.join(__dirname, 'data.db'));
@@ -113,30 +112,6 @@ function randomNickname() {
   return adj[Math.floor(Math.random() * adj.length)] + nouns[Math.floor(Math.random() * nouns.length)];
 }
 
-// 构建投票计数 JOIN 片段
-function buildVoteJoin(targetType) {
-  return `
-    LEFT JOIN (
-      SELECT target_id,
-        SUM(CASE WHEN vote_type='like' THEN 1 ELSE 0 END) as vote_likes,
-        SUM(CASE WHEN vote_type='dislike' THEN 1 ELSE 0 END) as vote_dislikes
-      FROM votes WHERE target_type='${targetType}'
-      GROUP BY target_id
-    ) v ON v.target_id = m.id
-    LEFT JOIN votes mv ON mv.target_type='${targetId}' AND mv.target_id=m.id AND mv.user_fingerprint=?
-  `;
-}
-
-// 构建投票计数字段
-function buildVoteColumns(alias = '') {
-  const p = alias ? alias + '.' : '';
-  return `
-    COALESCE(${p}vote_likes, 0) as real_likes,
-    COALESCE(${p}vote_dislikes, 0) as real_dislikes,
-    ${p}mv.vote_type as my_vote
-  `;
-}
-
 // 密码哈希（scrypt）
 function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString('hex');
@@ -146,13 +121,22 @@ function hashPassword(password) {
 
 // 验证密码
 function verifyPassword(password, stored) {
-  const [salt, hash] = stored.split(':');
-  const testHash = crypto.scryptSync(password, salt, 64).toString('hex');
-  return testHash === hash;
+  try {
+    const [salt, hash] = stored.split(':');
+    const testHash = crypto.scryptSync(password, salt, 64).toString('hex');
+    const expected = Buffer.from(hash, 'hex');
+    const actual = Buffer.from(testHash, 'hex');
+    return expected.length === actual.length && crypto.timingSafeEqual(actual, expected);
+  } catch (_) {
+    return false;
+  }
 }
 
 // 简单 Token（HMAC 签名 + Base64）
-const TOKEN_SECRET = process.env.TOKEN_SECRET || 'maozi-secret-key-change-in-production';
+if (process.env.NODE_ENV === 'production' && !process.env.TOKEN_SECRET) {
+  throw new Error('生产环境必须设置 TOKEN_SECRET');
+}
+const TOKEN_SECRET = process.env.TOKEN_SECRET || 'development-only-secret';
 
 function generateToken(userId, username, nickname) {
   const payload = JSON.stringify({ uid: userId, usr: username, nick: nickname, exp: Date.now() + 7 * 24 * 3600 * 1000 });
@@ -166,7 +150,7 @@ function verifyToken(token) {
   try {
     const [payloadB64, sig] = token.split('.');
     const expectedSig = crypto.createHmac('sha256', TOKEN_SECRET).update(payloadB64).digest('base64url');
-    if (sig !== expectedSig) return null;
+    if (!sig || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expectedSig))) return null;
     const payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString());
     if (payload.exp < Date.now()) return null;
     return payload;

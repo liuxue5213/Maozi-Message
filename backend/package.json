@@ -12,6 +12,7 @@
     "express-rate-limit": "^7.1.5",
     "cors": "^2.8.5",
     "better-sqlite3": "^9.4.3",
+    "dotenv": "^16.4.5",
     "uuid": "^9.0.0",
     "ws": "^8.16.0"
   }

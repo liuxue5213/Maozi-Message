@@ -16,6 +16,9 @@ data/
 
 # Local config
 **/local.properties
+.env
+**/.env
+!**/.env.example
 
 # OS
 .DS_Store

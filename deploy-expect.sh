@@ -1,9 +1,14 @@
 #!/bin/bash
-# 使用 expect 自动输入密码部署
+# 使用 expect 部署。建议优先配置 SSH 密钥；密码仅从环境变量或交互输入读取。
 SERVER="root@120.48.13.152"
-PASSWORD="liuxue5213"
 REMOTE_DIR="/root/maozi-message"
 BACKEND_DIR="$(cd "$(dirname "$0")/backend" && pwd)"
+
+if [ -z "${DEPLOY_PASSWORD:-}" ]; then
+  read -r -s "DEPLOY_PASSWORD?SSH password: "
+  echo
+fi
+PASSWORD="$DEPLOY_PASSWORD"
 
 echo "🚀 开始部署..."
 
@@ -19,7 +24,7 @@ echo "📁 目录已创建"
 
 # 2. 打包本地文件
 cd "$BACKEND_DIR"
-tar czf /tmp/maozi-backend.tar.gz --exclude='node_modules' --exclude='data.db' .
+tar czf /tmp/maozi-backend.tar.gz --exclude='node_modules' --exclude='data.db' --exclude='.env' .
 echo "📦 已打包"
 
 # 3. 上传压缩包
@@ -44,7 +49,7 @@ send "cd $REMOTE_DIR && tar xzf maozi-backend.tar.gz && rm maozi-backend.tar.gz\
 expect "#"
 send "cd $REMOTE_DIR && npm install --production 2>&1 | tail -10\r"
 expect "#"
-send "pm2 stop maozi-message 2>/dev/null; pm2 delete maozi-message 2>/dev/null; pm2 start $REMOTE_DIR/server.js --name maozi-message\r"
+send "pm2 stop maozi-message 2>/dev/null; pm2 delete maozi-message 2>/dev/null; cd $REMOTE_DIR && NODE_ENV=production pm2 start $REMOTE_DIR/server.js --name maozi-message --update-env\r"
 expect "#"
 send "pm2 save\r"
 expect "#"

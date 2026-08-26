@@ -4,8 +4,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/message.dart';
 
 class ApiService {
-  // 服务器地址 - 打包时修改为你的服务器IP
-  static const String baseUrl = 'http://120.48.13.152:60175/api';
+  // 通过 --dart-define=API_BASE_URL=https://example.com/api 配置生产地址。
+  static const String baseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'http://120.48.13.152:60175/api',
+  );
+  static const Duration _timeout = Duration(seconds: 15);
 
   static String? _fingerprint;
 
@@ -33,7 +37,7 @@ class ApiService {
     final res = await http.get(
       Uri.parse('$baseUrl/messages?limit=$limit'),
       headers: {'X-Fingerprint': fp},
-    );
+    ).timeout(_timeout);
     final data = jsonDecode(res.body);
     if (data['success'] == true) {
       return (data['data'] as List)
@@ -49,7 +53,7 @@ class ApiService {
     final res = await http.get(
       Uri.parse('$baseUrl/messages/$id'),
       headers: {'X-Fingerprint': fp},
-    );
+    ).timeout(_timeout);
     final data = jsonDecode(res.body);
     if (data['success'] == true) {
       return Message.fromJson(data['data']);
@@ -76,7 +80,7 @@ class ApiService {
         'mood': mood,
         'color': color,
       }),
-    );
+    ).timeout(_timeout);
     final data = jsonDecode(res.body);
     if (data['success'] == true) {
       return Message.fromJson(data['data']);
@@ -100,7 +104,7 @@ class ApiService {
         'author_name': authorName,
         'is_anonymous': isAnonymous,
       }),
-    );
+    ).timeout(_timeout);
     final data = jsonDecode(res.body);
     if (data['success'] == true) {
       return Reply.fromJson(data['data']);
@@ -122,7 +126,7 @@ class ApiService {
       Uri.parse(endpoint),
       headers: {'X-Fingerprint': fp, 'Content-Type': 'application/json'},
       body: jsonEncode({'vote_type': voteType}),
-    );
+    ).timeout(_timeout);
     final data = jsonDecode(res.body);
     if (data['success'] == true) {
       return data['data'];
@@ -136,7 +140,7 @@ class ApiService {
     final res = await http.get(
       Uri.parse('$baseUrl/stats'),
       headers: {'X-Fingerprint': fp},
-    );
+    ).timeout(_timeout);
     final data = jsonDecode(res.body);
     if (data['success'] == true) {
       return data['data'];
