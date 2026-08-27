@@ -61,6 +61,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   void initState() {
     super.initState();
     _ticker = createTicker(_onTick);
+    _connectWs();
     _loadData();
     _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) => _loadData());
     _loadSession();
@@ -174,8 +175,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         ),
       ),
     );
-  }
-    _connectWs();
   }
 
   @override
