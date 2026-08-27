@@ -4,8 +4,9 @@ import '../services/api_service.dart';
 
 class DetailScreen extends StatefulWidget {
   final String messageId;
+  final Message? preview; // 本地数据兜底（默认填充的留言服务端没有）
 
-  const DetailScreen({super.key, required this.messageId});
+  const DetailScreen({super.key, required this.messageId, this.preview});
 
   @override
   State<DetailScreen> createState() => _DetailScreenState();
@@ -20,6 +21,7 @@ class _DetailScreenState extends State<DetailScreen> {
   @override
   void initState() {
     super.initState();
+    _message = widget.preview; // 先用本地数据渲染，再去服务器补投票/回复
     _loadMessage();
   }
 
@@ -40,6 +42,16 @@ class _DetailScreenState extends State<DetailScreen> {
         });
       }
     } catch (e) {
+      // 服务端查不到（例如默认填充留言）：本地有就继续展示
+      if (widget.preview != null) {
+        if (mounted) {
+          setState(() {
+            _loading = false;
+            _error = null;
+          });
+        }
+        return;
+      }
       if (mounted) {
         setState(() {
           _error = e.toString();
@@ -49,8 +61,16 @@ class _DetailScreenState extends State<DetailScreen> {
     }
   }
 
+  bool get _isLocalPreview => _message?.id.startsWith('default_') ?? false;
+
   Future<void> _voteMessage(String voteType) async {
     if (_message == null) return;
+    if (_isLocalPreview) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('示例留言，暂不支持互动')),
+      );
+      return;
+    }
     try {
       final result = await ApiService.vote(
         type: 'message',
@@ -125,6 +145,12 @@ class _DetailScreenState extends State<DetailScreen> {
   Future<void> _sendReply() async {
     final content = _replyController.text.trim();
     if (content.isEmpty) return;
+    if (_isLocalPreview) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('示例留言，暂不支持互动')),
+      );
+      return;
+    }
 
     try {
       await ApiService.replyToMessage(

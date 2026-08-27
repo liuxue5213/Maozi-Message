@@ -17,7 +17,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
   List<Message> _allMessages = [];
   List<Message> _displayQueue = [];
-  List<_ActiveBarrage> _activeBarrages = [];
+  final List<_ActiveBarrage> _activeBarrages = [];
   final Set<String> _displayedIds = {};
   bool _loading = true;
   String? _error;
@@ -26,12 +26,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   int _todayCount = 0;
   int _totalCount = 0;
 
-  // 弹幕队列配置
   static const int _trackCount = 5;
   static const int _maxOnScreen = 5;
-  static const Duration _scrollDuration = Duration(seconds: 15);
+  // 恒定弹幕速度（像素/毫秒），观感对齐 Web 端
+  static const double _speedPxPerMs = 0.055;
+  static const int _minDurationMs = 8000;
+  static const int _maxDurationMs = 26000;
 
-  // 动态间隔：数据少时快放，数据多时慢放
   Duration _calcGap() {
     final n = _allMessages.length;
     if (n <= 5) return const Duration(milliseconds: 800);
@@ -40,10 +41,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     return const Duration(milliseconds: 3500);
   }
 
-  // 单控制器 + Stopwatch 计时
   late final Ticker _ticker;
-  final _stopwatch = Stopwatch();
-  double _screenWidth = 0;
+  final Stopwatch _stopwatch = Stopwatch();
+  // 只驱动弹幕层局部重建，绝不重建全页
+  final ValueNotifier<int> _tickFrame = ValueNotifier(0);
+  double _screenWidth = 400; // 每次 build 刷新，spawn 前兜底
   int _lastLaunchTimeMs = 0;
 
   @override
@@ -59,26 +61,25 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     _refreshTimer?.cancel();
     _schedulerTimer?.cancel();
     _ticker.dispose();
+    _tickFrame.dispose();
     super.dispose();
   }
 
+  // Ticker 回调：只做过期清理 + 循环检测 + 弹幕层帧通知
   void _onTick(Duration _) {
-    // 清理已完成的弹幕
     if (_activeBarrages.isNotEmpty) {
       final now = _stopwatch.elapsedMilliseconds;
-      final scrollMs = _scrollDuration.inMilliseconds;
-      _activeBarrages.removeWhere((b) => now - b.startTimeMs > scrollMs);
+      _activeBarrages.removeWhere((b) => now - b.startTimeMs > b.durationMs);
     }
-    // 一轮播完：清空已显示记录并重新排队，保证无限循环
     if (_activeBarrages.isEmpty && _displayQueue.isEmpty) {
       _ticker.stop();
       _stopwatch.stop();
-      _displayedIds.clear();
+      _displayedIds.clear(); // 清空已显示记录，实现无限循环
       Future.delayed(const Duration(milliseconds: 500), () {
         if (mounted) _initDisplayQueue();
       });
     }
-    setState(() {});
+    _tickFrame.value++;
   }
 
   Future<void> _loadData() async {
@@ -93,6 +94,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           _loading = false;
           _error = null;
         });
+        _ensureMinMessages();
         _initDisplayQueue();
       }
     } catch (e) {
@@ -105,62 +107,111 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     }
   }
 
+  void _ensureMinMessages() {
+    if (_allMessages.length >= 15) return;
+    const defaults = [
+      '今天天气真好 ☀️', '路过... 有猫吗？🐱', '刚看完一部电影，推荐！',
+      '下班好累 😫', '来都来了，留句话吧~', '今天有什么想说的？',
+      '有人在吗？打个招呼 👋', '午饭吃什么好呢 🍜', '晚安，明天见 🌙',
+      '突然想喝奶茶 🧋', '这个地方好安静', '今天的心情是蓝色',
+    ];
+    final fillCount = 15 - _allMessages.length;
+    final rng = Random();
+    for (int i = 0; i < fillCount; i++) {
+      _allMessages.add(Message(
+        id: 'default_${DateTime.now().millisecondsSinceEpoch}_$i',
+        content: defaults[rng.nextInt(defaults.length)],
+        authorName: '匿名',
+        isAnonymous: true,
+        createdAt: DateTime.now().toIso8601String(),
+        replies: [],
+      ));
+    }
+  }
+
   void _initDisplayQueue() {
-    // 排除已在队列中或正在显示的留言
+    // 排除已在队列中或正在显示的留言，避免重复
     final existingIds = _displayQueue.map((m) => m.id).toSet();
-    for (final b in _activeBarrages) existingIds.add(b.id);
-    final newMessages = _allMessages.where((m) => !_displayedIds.contains(m.id) && !existingIds.contains(m.id)).toList();
+    for (final b in _activeBarrages) {
+      existingIds.add(b.message.id);
+    }
+    final newMessages = _allMessages
+        .where((m) => !_displayedIds.contains(m.id) && !existingIds.contains(m.id))
+        .toList();
     _displayQueue = [..._displayQueue, ...newMessages]..shuffle();
     _startScheduler();
   }
 
   void _startScheduler() {
     _schedulerTimer?.cancel();
-    _schedulerTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
-      _scheduleNext();
-    });
+    _schedulerTimer = Timer.periodic(const Duration(milliseconds: 100), (_) => _scheduleNext());
 
-    // 启动计时器
     if (!_stopwatch.isRunning) _stopwatch.start();
 
-    // 初始同时发射 2-3 条
+    // 开场连发 2-3 条（绕过间隔但受屏显上限约束）
     final burst = min(3, _displayQueue.length);
     for (int i = 0; i < burst; i++) {
       Future.delayed(Duration(milliseconds: i * 400), () {
-        if (mounted) _launchBarrage();
+        if (mounted) _launchOneNow();
       });
     }
   }
 
   void _scheduleNext() {
-    if (!mounted) return;
-    final now = _stopwatch.elapsedMilliseconds;
+    if (!mounted || _displayQueue.isEmpty) return;
+    if (_activeBarrages.length >= _maxOnScreen) return;
     final gapMs = _calcGap().inMilliseconds;
-    if (_activeBarrages.length < _maxOnScreen && _displayQueue.isNotEmpty && now - _lastLaunchTimeMs >= gapMs) {
-      _launchBarrage();
-    }
+    if (_stopwatch.elapsedMilliseconds - _lastLaunchTimeMs < gapMs) return;
+    _launchOneNow();
   }
 
-  void _launchBarrage() {
-    if (_displayQueue.isEmpty || !mounted) return;
-    // 屏显上限保护，防止同轨道叠加
+  // 无视间隔立即发射一条（开场 burst / 自己刚发布的留言）
+  void _launchOneNow({Message? direct}) {
+    if (!mounted) return;
     if (_activeBarrages.length >= _maxOnScreen) return;
+    final Message msg;
+    if (direct != null) {
+      msg = direct;
+      _displayedIds.add(msg.id);
+    } else {
+      if (_displayQueue.isEmpty) return;
+      msg = _displayQueue.removeAt(0);
+      _displayedIds.add(msg.id);
+    }
+    _addActive(msg);
+  }
 
-    final msg = _displayQueue.removeAt(0);
-    _displayedIds.add(msg.id); // 记录已显示
+  void _addActive(Message msg) {
     final track = _getAvailableTrack();
-    final startTimeMs = _stopwatch.elapsedMilliseconds;
-    _lastLaunchTimeMs = startTimeMs;
+    final w = _estimateWidth(msg.content, msg.authorName);
+    final distance = _screenWidth + w + 60;
+    var durationMs = (distance / _speedPxPerMs).round();
+    durationMs = durationMs.clamp(_minDurationMs, _maxDurationMs);
 
-    setState(() => _activeBarrages.add(_ActiveBarrage(
+    _activeBarrages.add(_ActiveBarrage(
       message: msg,
       track: track,
-      startTimeMs: startTimeMs,
-    )));
+      startTimeMs: _stopwatch.elapsedMilliseconds,
+      durationMs: durationMs,
+      distanceX: distance,
+    ));
+    _lastLaunchTimeMs = _stopwatch.elapsedMilliseconds;
 
-    // 启动 Ticker（如果还没启动）
     if (!_ticker.isActive) _ticker.start();
-    // 后续发射统一由 _scheduleNext 按动态间隔调度，这里不做链式触发
+    _tickFrame.value++;
+  }
+
+  // 预估弹幕渲染宽度：文本 + 作者徽标 + 内边距 + 图标间隙
+  double _estimateWidth(String content, String authorName) {
+    final maxW = _screenWidth * 0.65;
+    final tp = TextPainter(
+      text: TextSpan(text: content, style: const TextStyle(fontSize: 14)),
+      textDirection: TextDirection.ltr,
+      maxLines: 1,
+    )..layout(maxWidth: maxW - 90);
+    var w = tp.width + 90; // 90 ≈ padding(28)+图标(18)+间距(10)+作者+点赞余量
+    tp.dispose();
+    return w.clamp(120.0, maxW);
   }
 
   int _getAvailableTrack() {
@@ -178,7 +229,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => DetailScreen(messageId: msg.id),
+        builder: (_) => DetailScreen(messageId: msg.id, preview: msg),
       ),
     ).then((_) => _loadData());
   }
@@ -216,21 +267,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               Wrap(
                 spacing: 8,
                 children: [
-                  _moodChip('happy', '😊', selectedMood, (m) {
-                    setDialogState(() => selectedMood = m);
-                  }),
-                  _moodChip('neutral', '😐', selectedMood, (m) {
-                    setDialogState(() => selectedMood = m);
-                  }),
-                  _moodChip('sad', '😢', selectedMood, (m) {
-                    setDialogState(() => selectedMood = m);
-                  }),
-                  _moodChip('excited', '🤩', selectedMood, (m) {
-                    setDialogState(() => selectedMood = m);
-                  }),
-                  _moodChip('calm', '😌', selectedMood, (m) {
-                    setDialogState(() => selectedMood = m);
-                  }),
+                  _moodChip('happy', '😊', selectedMood, (m) => setDialogState(() => selectedMood = m)),
+                  _moodChip('neutral', '😐', selectedMood, (m) => setDialogState(() => selectedMood = m)),
+                  _moodChip('sad', '😢', selectedMood, (m) => setDialogState(() => selectedMood = m)),
+                  _moodChip('excited', '🤩', selectedMood, (m) => setDialogState(() => selectedMood = m)),
+                  _moodChip('calm', '😌', selectedMood, (m) => setDialogState(() => selectedMood = m)),
                 ],
               ),
             ],
@@ -241,17 +282,20 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               child: const Text('取消', style: TextStyle(color: Colors.white54)),
             ),
             ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF48dbfb),
-              ),
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF48dbfb)),
               onPressed: () async {
-                if (controller.text.trim().isEmpty) return;
+                final content = controller.text.trim();
+                if (content.isEmpty) return;
                 try {
-                  await ApiService.createMessage(
-                    content: controller.text.trim(),
-                    mood: selectedMood,
-                  );
-                  Navigator.pop(ctx);
+                  final created = await ApiService.createMessage(content: content, mood: selectedMood);
+                  // 本地立刻上屏（不等轮询）；屏满则插队头等下一个空位
+                  if (_activeBarrages.length < _maxOnScreen) {
+                    if (!_stopwatch.isRunning) _stopwatch.start();
+                    _launchOneNow(direct: created);
+                  } else {
+                    _displayQueue.insert(0, created);
+                  }
+                  if (mounted) Navigator.pop(ctx);
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(content: Text('发布成功！')),
                   );
@@ -290,6 +334,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   @override
   Widget build(BuildContext context) {
+    _screenWidth = MediaQuery.of(context).size.width;
+    final screenH = MediaQuery.of(context).size.height;
+
     return Scaffold(
       backgroundColor: const Color(0xFF0a0a1a),
       body: SafeArea(
@@ -299,13 +346,23 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           backgroundColor: const Color(0xFF1e1e3a),
           child: Stack(
             children: [
+              // 可滚动锚层：让 RefreshIndicator 的下拉手势生效
+              Positioned.fill(
+                child: SingleChildScrollView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  child: SizedBox(height: screenH),
+                ),
+              ),
+
               // 星空背景
-              Container(
-                decoration: const BoxDecoration(
-                  gradient: RadialGradient(
-                    center: Alignment(0, -0.3),
-                    radius: 1.2,
-                    colors: [Color(0xFF1a1a3e), Color(0xFF0a0a1a)],
+              Positioned.fill(
+                child: Container(
+                  decoration: const BoxDecoration(
+                    gradient: RadialGradient(
+                      center: Alignment(0, -0.3),
+                      radius: 1.2,
+                      colors: [Color(0xFF1a1a3e), Color(0xFF0a0a1a)],
+                    ),
                   ),
                 ),
               ),
@@ -327,9 +384,34 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 ),
               ),
 
-              // 弹幕区域（Ticker 驱动重绘）
+              // 弹幕层：ValueListenableBuilder 只重建这一小层
               if (!_loading && _error == null)
-                ..._buildBarrageLayers(),
+                Positioned.fill(
+                  child: IgnorePointer(
+                    ignoring: false,
+                    child: ValueListenableBuilder<int>(
+                      valueListenable: _tickFrame,
+                      builder: (context, _, __) {
+                        final nowMs = _stopwatch.elapsedMilliseconds;
+                        return Stack(
+                          clipBehavior: Clip.none,
+                          children: _activeBarrages.map((barrage) {
+                            final progress =
+                                ((nowMs - barrage.startTimeMs) / barrage.durationMs).clamp(0.0, 1.0);
+                            return Positioned(
+                              left: _screenWidth + 50 - barrage.distanceX * progress,
+                              top: (screenH - 120) / (_trackCount + 2) * (barrage.track + 0.8),
+                              child: BarrageItem(
+                                message: barrage.message,
+                                onTap: () => _openDetail(barrage.message),
+                              ),
+                            );
+                          }).toList(),
+                        );
+                      },
+                    ),
+                  ),
+                ),
 
               // 加载/错误状态
               if (_loading)
@@ -352,20 +434,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   ),
                 ),
 
-              // 空状态
-              if (!_loading && _error == null && _allMessages.isEmpty && _activeBarrages.isEmpty)
-                const Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text('💬', style: TextStyle(fontSize: 48)),
-                      SizedBox(height: 12),
-                      Text('今天还没有留言，快来抢沙发！',
-                          style: TextStyle(color: Colors.white38, fontSize: 15)),
-                    ],
-                  ),
-                ),
-
               // 底部发布按钮
               Positioned(
                 bottom: 20,
@@ -383,37 +451,14 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       ),
     );
   }
-
-  List<Widget> _buildBarrageLayers() {
-    _screenWidth = MediaQuery.of(context).size.width;
-    final screenH = MediaQuery.of(context).size.height;
-    final trackHeight = (screenH - 120) / (_trackCount + 2);
-    final now = _stopwatch.elapsedMilliseconds;
-    final scrollMs = _scrollDuration.inMilliseconds;
-
-    // 只渲染仍在飞行中的弹幕（清理在 _onTick 中进行）
-    return _activeBarrages.map((barrage) {
-      final elapsed = now - barrage.startTimeMs;
-      final progress = (elapsed / scrollMs).clamp(0.0, 1.0);
-      final x = _screenWidth + 50 + (-_screenWidth - 350) * progress;
-      final y = trackHeight * (barrage.track + 0.8);
-
-      return Positioned(
-        left: x,
-        top: y,
-        child: BarrageItem(
-          message: barrage.message,
-          onTap: () => _openDetail(barrage.message),
-        ),
-      );
-    }).toList();
-  }
 }
 
 class _ActiveBarrage {
   final Message message;
   final int track;
   final int startTimeMs;
+  final int durationMs; // 各条独立时长（恒速飞行）
+  final double distanceX; // 本次飞行的总距离
 
   String get id => message.id;
 
@@ -421,5 +466,7 @@ class _ActiveBarrage {
     required this.message,
     required this.track,
     required this.startTimeMs,
+    required this.durationMs,
+    required this.distanceX,
   });
 }
