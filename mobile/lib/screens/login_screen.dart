@@ -108,8 +108,6 @@ class _LoginScreenState extends State<LoginScreen> {
                   style: const TextStyle(color: Colors.white),
                   maxLength: 20,
                   decoration: _inputDeco('昵称（对外展示）'),
-                  counterStyle:
-                      const TextStyle(color: Colors.white24, fontSize: 10),
                 ),
               ],
               const SizedBox(height: 8),
@@ -163,6 +161,7 @@ class _LoginScreenState extends State<LoginScreen> {
   InputDecoration _inputDeco(String hint) => InputDecoration(
         hintText: hint,
         hintStyle: const TextStyle(color: Colors.white24),
+        counterStyle: const TextStyle(color: Colors.white24, fontSize: 10),
         filled: true,
         fillColor: const Color(0x1AFFFFFF),
         border: OutlineInputBorder(
