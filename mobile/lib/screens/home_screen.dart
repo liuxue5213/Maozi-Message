@@ -56,6 +56,16 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   Timer? _wsRetry;
   int _wsBackoffSec = 1;
   bool _disposing = false;
+  bool _wsConnected = false;
+
+  // 轮询频率自适应：WS 在线 2 分钟兜底一次；断线 30 秒高频补偿
+  void _startPolling() {
+    _refreshTimer?.cancel();
+    final interval =
+        _wsConnected ? const Duration(minutes: 2) : const Duration(seconds: 30);
+    if (_disposing || !mounted) return;
+    _refreshTimer = Timer.periodic(interval, (_) => _loadData());
+  }
 
   @override
   void initState() {
@@ -63,7 +73,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     _ticker = createTicker(_onTick);
     _connectWs();
     _loadData();
-    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) => _loadData());
+    _startPolling();
     _loadSession();
   }
 
@@ -200,15 +210,25 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     if (_disposing) return;
     try {
       _ws = WebSocketChannel.connect(_wsUri);
+      _wsConnected = true;
       _wsBackoffSec = 1;
+      _startPolling(); // 实时通道可用：轮询降为低频兜底
       _ws!.stream.listen(
         (raw) => _handleWsEvent(raw is String ? raw : utf8.decode(raw as List<int>)),
-        onError: (_) => _scheduleWsRetry(),
-        onDone: _scheduleWsRetry,
+        onError: (_) => _onWsDown(),
+        onDone: _onWsDown,
       );
     } catch (_) {
-      _scheduleWsRetry();
+      _onWsDown();
     }
+  }
+
+  void _onWsDown() {
+    if (_disposing) return;
+    final wasConnected = _wsConnected;
+    _wsConnected = false;
+    _scheduleWsRetry();
+    if (wasConnected) _startPolling(); // 断线恢复高频轮询兜底
   }
 
   void _scheduleWsRetry() {

@@ -33,8 +33,25 @@ app.set('wsBroadcast', broadcast);
 
 wss.on('connection', (ws) => {
   console.log('🔌 WebSocket 客户端已连接');
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
   ws.on('close', () => console.log('❌ WebSocket 客户端已断开'));
 });
+
+// 心跳：30s 一轮 ping；未回 pong 的半开连接直接终结，
+// 防止手机锁屏/NAT 切网后的僵尸连接长期占用
+const HEARTBEAT_MS = Number(process.env.WS_HEARTBEAT_MS) || 30000;
+const heartbeat = setInterval(() => {
+  wss.clients.forEach((client) => {
+    if (client.isAlive === false) {
+      client.terminate();
+      return;
+    }
+    client.isAlive = false;
+    client.ping();
+  });
+}, HEARTBEAT_MS);
+heartbeat.unref();
 
 // 中间件
 const allowedOrigins = process.env.CORS_ORIGINS

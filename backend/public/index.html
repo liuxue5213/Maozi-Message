@@ -343,18 +343,28 @@
         try {
           const { type, data } = JSON.parse(e.data);
           if (type === 'new_message') {
-            allMessages.unshift(data);
+            // 去重守卫：本地发送路径/轮询/飞行中任一已有则跳过，防止同条飞两次
+            const alreadyQueued = displayQueue.some(m => m.id === data.id);
+            const alreadyFlying = activeBarrages.some(b => b.id === data.id);
+            if (!data.id || displayedIds.has(data.id) || alreadyQueued || alreadyFlying) return;
+            const knownIdx = allMessages.findIndex(m => m.id === data.id);
+            if (knownIdx === -1) allMessages.unshift(data); else allMessages[knownIdx] = data;
             displayQueue.unshift(data);
             document.getElementById('empty-state').classList.add('hidden');
           } else if (type === 'new_reply') {
             const msg = allMessages.find(m => m.id === data.message_id);
-            if (msg) {
+            if (msg && !(msg.replies || []).some(r => r.id === data.reply.id)) {
               msg.replies = msg.replies || [];
               msg.replies.push(data.reply);
+              msg.replies_count = (msg.replies_count || 0) + 1;
             }
           } else if (type === 'message_deleted') {
             allMessages = allMessages.filter(m => m.id !== data.id);
             displayQueue = displayQueue.filter(m => m.id !== data.id);
+            // 飞行中的同 ID 弹幕立即移除
+            activeBarrages.filter(b => b.id === data.id).forEach(b => { b.anim.cancel(); b.el.remove(); });
+            activeBarrages = activeBarrages.filter(b => b.id !== data.id);
+            updateTrackIndicators();
           } else if (type === 'vote_update') {
             const target = data.target_type === 'message'
               ? allMessages.find(m => m.id === data.target_id)
