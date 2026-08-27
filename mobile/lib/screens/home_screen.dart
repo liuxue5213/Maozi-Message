@@ -8,6 +8,7 @@ import '../models/message.dart';
 import '../services/api_service.dart';
 import '../widgets/barrage_item.dart';
 import 'detail_screen.dart';
+import 'login_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -62,6 +63,118 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     _ticker = createTicker(_onTick);
     _loadData();
     _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) => _loadData());
+    _loadSession();
+  }
+
+  bool _loggedIn = false;
+  String _nickname = '';
+  String _avatarColor = '#48dbfb';
+
+  Future<void> _loadSession() async {
+    final logged = await ApiService.isLoggedIn();
+    final user = await ApiService.getSession();
+    if (!mounted) return;
+    setState(() {
+      _loggedIn = logged;
+      _nickname = (user?['nickname'] as String?) ?? '';
+      _avatarColor = (user?['avatar_color'] as String?) ?? '#48dbfb';
+    });
+  }
+
+  Future<void> _openAccount() async {
+    if (!_loggedIn) {
+      final okLogin = await Navigator.push<bool>(
+        context,
+        MaterialPageRoute(builder: (_) => const LoginScreen()),
+      );
+      if (okLogin == true && mounted) {
+        await _loadSession();
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('欢迎，$_nickname')),
+        );
+        _loadData(); // 拉取后 mine 标记随 token 生效
+      }
+      return;
+    }
+    // 已登录：底部弹层展示资料与注销
+    final colorHex = _avatarColor.replaceFirst('#', 'ff');
+    final avatarColor = Color(int.parse(colorHex, radix: 16));
+    await showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1e1e3a),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (sheetCtx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 24, 20, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  CircleAvatar(
+                    radius: 22,
+                    backgroundColor: avatarColor,
+                    child: Text(
+                      _nickname.isNotEmpty ? _nickname.characters.first : '?',
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(_nickname,
+                            style: const TextStyle(
+                                color: Colors.white, fontSize: 17)),
+                        const SizedBox(height: 2),
+                        Text('登录身份 · 留言显示真实昵称',
+                            style: TextStyle(
+                                color: Colors.white.withOpacity(0.45),
+                                fontSize: 12)),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 20),
+              OutlinedButton.icon(
+                onPressed: () async {
+                  Navigator.pop(sheetCtx);
+                  await ApiService.logout();
+                  if (!mounted) return;
+                  setState(() {
+                    _loggedIn = false;
+                    _nickname = '';
+                  });
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('已退出登录')),
+                  );
+                  _loadData();
+                },
+                icon: const Icon(Icons.logout, size: 18),
+                label: const Text('退出登录'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFFFF6B6B),
+                  side: BorderSide(color: Colors.red.withOpacity(0.4)),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
     _connectWs();
   }
 
@@ -147,6 +260,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               repliesCount: _allMessages[idx].repliesCount + 1,
               createdAt: _allMessages[idx].createdAt,
               myVote: _allMessages[idx].myVote,
+              mine: _allMessages[idx].mine,
               replies: [..._allMessages[idx].replies, Reply.fromJson(reply)],
             );
           }
@@ -348,6 +462,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              Text(
+                _loggedIn ? '以「$_nickname」身份发布' : '匿名身份 · 右上角可登录',
+                style: TextStyle(
+                    color: Colors.white.withOpacity(0.35), fontSize: 11),
+              ),
+              const SizedBox(height: 10),
               TextField(
                 controller: controller,
                 style: const TextStyle(color: Colors.white),
@@ -388,7 +508,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 final content = controller.text.trim();
                 if (content.isEmpty) return;
                 try {
-                  final created = await ApiService.createMessage(content: content, mood: selectedMood);
+                  final created = await ApiService.createMessage(
+                    content: content,
+                    mood: selectedMood,
+                    isAnonymous: !_loggedIn,
+                  );
                   // 本地立刻上屏（不等轮询）；屏满则插队头等下一个空位
                   if (_activeBarrages.length < _maxOnScreen) {
                     if (!_stopwatch.isRunning) _stopwatch.start();
@@ -481,6 +605,54 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   child: Text(
                     '📊 今日: $_todayCount 条 | 总计: $_totalCount 条',
                     style: const TextStyle(color: Colors.white60, fontSize: 12),
+                  ),
+                ),
+              ),
+
+              // 账号入口（右上角）
+              Positioned(
+                top: 10,
+                right: 16,
+                child: GestureDetector(
+                  onTap: _openAccount,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: _loggedIn
+                          ? const Color(0xFF48dbfb).withOpacity(0.15)
+                          : Colors.black54,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: _loggedIn
+                            ? const Color(0xFF48dbfb).withOpacity(0.6)
+                            : Colors.transparent,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          _loggedIn
+                              ? Icons.verified_user_rounded
+                              : Icons.person_outline_rounded,
+                          size: 14,
+                          color: _loggedIn
+                              ? const Color(0xFF48dbfb)
+                              : Colors.white54,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          _loggedIn ? _nickname : '登录',
+                          style: TextStyle(
+                            color: _loggedIn
+                                ? const Color(0xFF48dbfb)
+                                : Colors.white54,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),

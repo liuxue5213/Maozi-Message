@@ -12,6 +12,7 @@ class Message {
   final int repliesCount;
   final String createdAt;
   final String? myVote;
+  final bool mine;
   final List<Reply> replies;
 
   Message({
@@ -28,6 +29,7 @@ class Message {
     this.repliesCount = 0,
     required this.createdAt,
     this.myVote,
+    this.mine = false,
     this.replies = const [],
   });
 
@@ -46,6 +48,7 @@ class Message {
       repliesCount: json['replies_count'] ?? 0,
       createdAt: json['created_at'] ?? '',
       myVote: json['my_vote'],
+      mine: json['mine'] == 1 || json['mine'] == true,
       replies: (json['replies'] as List<dynamic>?)
               ?.map((r) => Reply.fromJson(r))
               .toList() ??

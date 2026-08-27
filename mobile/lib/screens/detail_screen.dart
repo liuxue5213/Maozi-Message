@@ -88,6 +88,7 @@ class _DetailScreenState extends State<DetailScreen> {
             likesCount: result['likes'] ?? 0,
             dislikesCount: result['dislikes'] ?? 0,
             myVote: result['my_vote'],
+            mine: _message!.mine,
           );
         });
       }
@@ -132,6 +133,7 @@ class _DetailScreenState extends State<DetailScreen> {
             likesCount: _message!.likesCount,
             dislikesCount: _message!.dislikesCount,
             myVote: _message!.myVote,
+            mine: _message!.mine,
           );
         });
       }
@@ -166,6 +168,46 @@ class _DetailScreenState extends State<DetailScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('回复失败: $e')),
       );
+    }
+  }
+
+  Future<void> _deleteOwn() async {
+    final id = _message!.id;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1e1e3a),
+        title: const Text('删除留言', style: TextStyle(color: Colors.white, fontSize: 17)),
+        content: const Text('确定删除这条留言吗？\n回复也会一并删除。',
+            style: TextStyle(color: Colors.white70, fontSize: 14)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消', style: TextStyle(color: Colors.white54)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('删除',
+                style: TextStyle(color: Color(0xFFFF6B6B), fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await ApiService.deleteMessage(id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('已删除')),
+      );
+      Navigator.pop(context, 'deleted');
+    } catch (e) {
+      var msg = e.toString();
+      if (msg.startsWith('Exception: ')) msg = msg.substring(11);
+      if (msg.contains('登录')) {
+        msg = '$msg（右上角可登录）';
+      }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
     }
   }
 
@@ -255,6 +297,36 @@ class _DetailScreenState extends State<DetailScreen> {
                           isActive: _message!.myVote == 'dislike',
                           onTap: () => _voteMessage('dislike'),
                         ),
+                        if (_message!.mine) ...[
+                          const SizedBox(width: 12),
+                          GestureDetector(
+                            onTap: _deleteOwn,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 14, vertical: 8),
+                              decoration: BoxDecoration(
+                                color:
+                                    const Color(0xFFFF6B6B).withOpacity(0.12),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(
+                                    color: const Color(0xFFFF6B6B)
+                                        .withOpacity(0.4)),
+                              ),
+                              child: const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.delete_outline,
+                                      size: 15, color: Color(0xFFFF6B6B)),
+                                  SizedBox(width: 4),
+                                  Text('删除',
+                                      style: TextStyle(
+                                          color: Color(0xFFFF6B6B),
+                                          fontSize: 13)),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
                         const Spacer(),
                         Text('💬 ${_message!.replies.length} 条回复',
                             style: const TextStyle(color: Colors.white38, fontSize: 12)),

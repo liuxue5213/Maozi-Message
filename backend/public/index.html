@@ -87,6 +87,12 @@
     .vote-btn:hover { background: rgba(255,255,255,0.12); }
     .vote-btn.like.active { background: rgba(16,172,132,0.25); border-color: #10ac84; color: #10ac84; }
     .vote-btn.dislike.active { background: rgba(255,107,107,0.25); border-color: #ff6b6b; color: #ff6b6b; }
+    .del-btn {
+      padding: 6px 14px; border-radius: 20px;
+      background: rgba(255,107,107,0.12); border: 1px solid rgba(255,107,107,0.4);
+      color: #ff6b6b; font-size: 13px; cursor: pointer; margin-left: auto;
+    }
+    .del-btn:hover { background: rgba(255,107,107,0.22); }
     .reply-list { margin-bottom: 12px; }
     .reply-item { background: rgba(255,255,255,0.04); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; font-size: 14px; }
     .reply-item .author { opacity: 0.6; font-size: 11px; margin-bottom: 4px; }
@@ -559,6 +565,7 @@
             <div class="vote-section">
               <button class="vote-btn like ${msg.my_vote==='like'?'active':''}" onclick="vote('message','${id}','like')">👍 <span id="msg-likes">${msg.real_likes||0}</span></button>
               <button class="vote-btn dislike ${msg.my_vote==='dislike'?'active':''}" onclick="vote('message','${id}','dislike')">👎 <span id="msg-dislikes">${msg.real_dislikes||0}</span></button>
+              ${msg.mine ? `<button class="del-btn" onclick="deleteMessage('${id}')">🗑 删除</button>` : ''}
             </div>
           </div>
           <div class="reply-list" id="reply-list">
@@ -596,6 +603,29 @@
         if (data.success) { input.value = ''; openDetail(messageId); loadMessages(); }
         else { errEl.textContent = data.error || '回复失败'; }
       } catch (e) { errEl.textContent = '网络错误，请重试'; }
+    }
+
+    // 删除自己的留言
+    async function deleteMessage(id) {
+      if (!confirm('确定删除这条留言吗？回复也会一并删除。')) return;
+      try {
+        const res = await fetch(`${API_BASE}/api/messages/${id}`, {
+          method: 'DELETE', headers: getAuthHeaders(),
+        });
+        const data = await res.json();
+        if (data.success) {
+          closeDetail();
+          allMessages = allMessages.filter(m => m.id !== id);
+          displayQueue = displayQueue.filter(m => m.id !== id);
+          activeBarrages.filter(b => b.id === id).forEach(b => { b.anim.cancel(); b.el.remove(); });
+          activeBarrages = activeBarrages.filter(b => b.id !== id);
+          loadStats();
+        } else if (res.status === 401) {
+          alert('请先登录后再删除');
+        } else {
+          alert(data.error || '删除失败');
+        }
+      } catch (e) { alert('网络错误，请重试'); }
     }
 
     async function vote(type, id, voteType) {

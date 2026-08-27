@@ -104,6 +104,7 @@ router.get('/messages/:id', (req, res) => {
     const msg = db.prepare(`
       SELECT m.id, m.content, m.author_name, m.color, m.bg_color, m.mood,
         m.is_anonymous, m.replies_count, m.created_at, m.expire_at, m.is_pinned,
+        m.author_id AS __aid,
         COALESCE(v.vote_likes, 0) as real_likes,
         COALESCE(v.vote_dislikes, 0) as real_dislikes,
         mv.vote_type as my_vote
@@ -121,6 +122,9 @@ router.get('/messages/:id', (req, res) => {
     `).get(fp, req.params.id);
 
     if (!msg) return res.status(404).json({ success: false, error: '留言不存在' });
+    // 归属标记：仅登录作者可见删除入口；author_id 本身不外泄
+    const { __aid, ...msgData } = msg;
+    msgData.mine = !!(tokenPayload && __aid === tokenPayload.uid);
 
     const replies = db.prepare(`
       SELECT r.id, r.message_id, r.content, r.author_name, r.created_at,
@@ -140,7 +144,7 @@ router.get('/messages/:id', (req, res) => {
       ORDER BY r.created_at ASC
     `).all(fp, msg.id);
 
-    res.json({ success: true, data: { ...msg, replies } });
+    res.json({ success: true, data: { ...msgData, replies } });
   } catch (err) {
     console.error('获取详情失败:', err);
     res.status(500).json({ success: false, error: '加载失败' });
