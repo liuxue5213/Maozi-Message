@@ -204,7 +204,7 @@
     const API_BASE = window.location.origin;
     const TRACK_COUNT = 5;
     const MAX_ON_SCREEN = 5;
-    const SCROLL_DURATION = 15000;
+    const WEB_SPEED_PXPXS = 50; // 恒定弹幕速度（像素/秒）
     const FILL_THRESHOLD = 15;
 
     // 动态间隔：数据少时快放，数据多时慢放
@@ -444,10 +444,13 @@
       el.addEventListener('click', () => openDetail(message.id));
       document.getElementById('barrage-container').appendChild(el);
       const elWidth = el.offsetWidth;
+      // 恒速飞行：按实际宽度算总距离和各自时长，长短留言同速且完整滑出
+      const distancePx = window.innerWidth + elWidth + 40;
+      const scrollMs = Math.min(26000, Math.max(8000, Math.round(distancePx / WEB_SPEED_PXPXS * 1000)));
       const anim = el.animate([
         { transform: 'translateX(0)' },
-        { transform: `translateX(-${window.innerWidth + elWidth + 20}px)` }
-      ], { duration: SCROLL_DURATION, easing: 'linear' });
+        { transform: `translateX(-${distancePx}px)` }
+      ], { duration: scrollMs, easing: 'linear' });
       activeBarrages.push({ id: message.id, track, el, anim });
       updateTrackIndicators();
       anim.onfinish = () => {

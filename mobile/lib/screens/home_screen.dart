@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 import '../models/message.dart';
 import '../services/api_service.dart';
 import '../widgets/barrage_item.dart';
@@ -48,21 +50,120 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   double _screenWidth = 400; // 每次 build 刷新，spawn 前兜底
   int _lastLaunchTimeMs = 0;
 
+  // WebSocket 实时推送
+  WebSocketChannel? _ws;
+  Timer? _wsRetry;
+  int _wsBackoffSec = 1;
+  bool _disposing = false;
+
   @override
   void initState() {
     super.initState();
     _ticker = createTicker(_onTick);
     _loadData();
     _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) => _loadData());
+    _connectWs();
   }
 
   @override
   void dispose() {
+    _disposing = true;
     _refreshTimer?.cancel();
     _schedulerTimer?.cancel();
+    _wsRetry?.cancel();
+    _ws?.sink.close();
     _ticker.dispose();
     _tickFrame.dispose();
     super.dispose();
+  }
+
+  // ws://host:60175/ws，由 http base 推导
+  Uri get _wsUri => Uri.parse(
+        ApiService.baseUrl
+            .replaceFirst(RegExp(r'^http'), 'ws')
+            .replaceFirst(RegExp(r'/api/?$'), '/ws'),
+      );
+
+  void _connectWs() {
+    if (_disposing) return;
+    try {
+      _ws = WebSocketChannel.connect(_wsUri);
+      _wsBackoffSec = 1;
+      _ws!.stream.listen(
+        (raw) => _handleWsEvent(raw is String ? raw : utf8.decode(raw as List<int>)),
+        onError: (_) => _scheduleWsRetry(),
+        onDone: _scheduleWsRetry,
+      );
+    } catch (_) {
+      _scheduleWsRetry();
+    }
+  }
+
+  void _scheduleWsRetry() {
+    if (_disposing) return;
+    _wsRetry?.cancel();
+    _wsRetry = Timer(Duration(seconds: _wsBackoffSec), () {
+      if (_disposing || !mounted) return;
+      _connectWs();
+      _wsBackoffSec = (_wsBackoffSec * 2).clamp(1, 30);
+    });
+  }
+
+  void _handleWsEvent(String raw) {
+    if (!mounted) return;
+    try {
+      final event = jsonDecode(raw) as Map<String, dynamic>;
+      switch (event['type']) {
+        case 'new_message':
+          final msg = Message.fromJson((event['data'] ?? {}) as Map<String, dynamic>);
+          if (msg.id.isEmpty || _displayedIds.contains(msg.id)) break;
+          // 若本地已有同 ID（刚发布的临时数据被服务器刷新补齐），跳过
+          if (_allMessages.any((m) => m.id == msg.id)) break;
+          _allMessages.insert(0, msg);
+          _displayQueue.insert(0, msg); // 插队头，下个空位立刻飞出
+          // 空闲轮次中收到新留言：立即唤醒调度
+          if (!_stopwatch.isRunning) {
+            _stopwatch.start();
+            _startScheduler();
+          }
+          break;
+        case 'new_reply':
+          final data = (event['data'] ?? {}) as Map<String, dynamic>;
+          final mid = data['message_id'] as String?;
+          final reply = data['reply'];
+          if (mid == null || reply == null) break;
+          final idx = _allMessages.indexWhere((m) => m.id == mid);
+          if (idx != -1 && !_allMessages[idx].replies.any((r) => r.id == reply['id'])) {
+            _allMessages[idx] = Message(
+              id: _allMessages[idx].id,
+              content: _allMessages[idx].content,
+              authorName: _allMessages[idx].authorName,
+              color: _allMessages[idx].color,
+              bgColor: _allMessages[idx].bgColor,
+              mood: _allMessages[idx].mood,
+              isAnonymous: _allMessages[idx].isAnonymous,
+              likesCount: _allMessages[idx].likesCount,
+              dislikesCount: _allMessages[idx].dislikesCount,
+              repliesCount: _allMessages[idx].repliesCount + 1,
+              createdAt: _allMessages[idx].createdAt,
+              myVote: _allMessages[idx].myVote,
+              replies: [..._allMessages[idx].replies, Reply.fromJson(reply)],
+            );
+          }
+          break;
+        case 'message_deleted':
+          final id = (event['data'] ?? {})['id'];
+          if (id is! String) break;
+          _allMessages.removeWhere((m) => m.id == id);
+          _displayQueue.removeWhere((m) => m.id == id);
+          final before = _activeBarrages.length;
+          _activeBarrages.removeWhere((b) => b.message.id == id);
+          if (_activeBarrages.length != before) _tickFrame.value++;
+          break;
+        default:
+          break; // vote_update 等事件由详情页自行拉取
+      }
+    } catch (_) {/* 坏包忽略 */}
   }
 
   // Ticker 回调：只做过期清理 + 循环检测 + 弹幕层帧通知
