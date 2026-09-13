@@ -134,10 +134,24 @@ class ApiService {
 
   // ---------- 留言 ----------
 
-  /// 获取今日留言列表
-  static Future<List<Message>> getMessages({int limit = 200}) async {
+  /// 当前身份标识：登录用户取 uid，匿名取设备指纹（与后端 author_id 规则一致）
+  static Future<String> myIdentity() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getString(_tokenKey) != null) {
+      final user = await getSession();
+      final id = user?['id'];
+      if (id is String && id.isNotEmpty) return id;
+    }
+    return _getFingerprint();
+  }
+
+  /// 获取留言列表：默认今日；date 指定日期；mine=true 查当前登录用户的全部留言
+  static Future<List<Message>> getMessages({int limit = 200, String? date, bool mine = false}) async {
+    final params = <String>['limit=$limit'];
+    if (date != null) params.add('date=$date');
+    if (mine) params.add('mine=1');
     final res = await http.get(
-      Uri.parse('$baseUrl/messages?limit=$limit'),
+      Uri.parse('$baseUrl/messages?${params.join('&')}'),
       headers: await _headers(),
     ).timeout(_timeout);
     final data = jsonDecode(res.body);
@@ -236,6 +250,28 @@ class ApiService {
     final data = jsonDecode(res.body);
     if (data['success'] != true) {
       throw Exception(data['error'] ?? '删除失败');
+    }
+  }
+
+  /// 举报留言/回复（匿名可举报）
+  static Future<void> report({
+    required String type,
+    required String id,
+    String reason = '',
+  }) async {
+    final endpoint = type == 'message'
+        ? '$baseUrl/messages/$id/report'
+        : '$baseUrl/replies/$id/report';
+    final res = await http
+        .post(
+          Uri.parse(endpoint),
+          headers: await _headers(jsonBody: true),
+          body: jsonEncode({'reason': reason}),
+        )
+        .timeout(_timeout);
+    final data = jsonDecode(res.body);
+    if (data['success'] != true) {
+      throw Exception(data['error'] ?? '举报失败');
     }
   }
 

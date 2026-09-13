@@ -14,6 +14,14 @@
     }
     .stars { position: fixed; inset: 0; z-index: 0;
       background: radial-gradient(ellipse at center, #1a1a3e 0%, #0a0a1a 100%); }
+    .star {
+      position: absolute; border-radius: 50%; background: #fff;
+      animation: twinkle linear infinite;
+    }
+    @keyframes twinkle {
+      0%, 100% { opacity: 0.12; transform: scale(0.8); }
+      50% { opacity: 0.9; transform: scale(1.2); }
+    }
     #barrage-container { position: fixed; inset: 0; z-index: 1; pointer-events: none; }
     .barrage-item {
       position: absolute; white-space: nowrap; padding: 8px 16px;
@@ -59,12 +67,40 @@
     }
     #ws-status.connected { background: rgba(16,172,132,0.25); color: #10ac84; }
     #ws-status.disconnected { background: rgba(255,107,107,0.25); color: #ff6b6b; }
+    #date-nav {
+      position: fixed; top: 46px; left: 16px; z-index: 10;
+      display: flex; align-items: center; gap: 6px;
+      color: rgba(255,255,255,0.7); font-size: 12px;
+      background: rgba(0,0,0,0.4); padding: 4px 8px; border-radius: 12px;
+    }
+    #date-nav button {
+      background: none; border: none; color: #48dbfb; font-size: 15px;
+      cursor: pointer; padding: 0 4px; line-height: 1;
+    }
+    #date-nav button:disabled { color: rgba(255,255,255,0.2); cursor: default; }
+    #toast {
+      position: fixed; top: 14px; left: 50%; transform: translateX(-50%) translateY(-8px);
+      z-index: 300; max-width: 80vw;
+      background: rgba(30,30,58,0.95); border: 1px solid rgba(72,219,251,0.4);
+      color: #fff; font-size: 13px; padding: 10px 18px; border-radius: 12px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+      opacity: 0; pointer-events: none; transition: opacity 0.25s, transform 0.25s;
+    }
+    #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+    #user-info { position: relative; }
     #detail-modal {
       position: fixed; inset: 0; z-index: 100;
       background: rgba(0,0,0,0.7); backdrop-filter: blur(4px);
       display: none; align-items: center; justify-content: center;
     }
     #detail-modal.active { display: flex; }
+    #detail-modal.active .modal-content, #auth-modal.active .modal-content {
+      animation: modal-pop 0.22s ease;
+    }
+    @keyframes modal-pop {
+      from { transform: scale(0.92); opacity: 0; }
+      to { transform: scale(1); opacity: 1; }
+    }
     .modal-content {
       background: #1e1e3a; border-radius: 16px; width: 90%; max-width: 420px;
       max-height: 80vh; overflow-y: auto; padding: 20px; color: #fff;
@@ -93,6 +129,13 @@
       color: #ff6b6b; font-size: 13px; cursor: pointer; margin-left: auto;
     }
     .del-btn:hover { background: rgba(255,107,107,0.22); }
+    .report-btn {
+      padding: 6px 12px; border-radius: 20px;
+      background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15);
+      color: rgba(255,255,255,0.6); font-size: 12px; cursor: pointer;
+    }
+    .report-btn:hover { background: rgba(255,255,255,0.12); color: #fff; }
+    .reply-item .actions button.report-mini { padding: 4px 8px; }
     .reply-list { margin-bottom: 12px; }
     .reply-item { background: rgba(255,255,255,0.04); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; font-size: 14px; }
     .reply-item .author { opacity: 0.6; font-size: 11px; margin-bottom: 4px; }
@@ -155,11 +198,23 @@
       font-size: 13px; font-weight: 600; color: #fff;
     }
     #user-name { font-size: 13px; color: rgba(255,255,255,0.8); max-width: 80px; overflow: hidden; text-overflow: ellipsis; }
+    #red-dot {
+      display: none; position: absolute; top: -2px; right: -2px;
+      width: 10px; height: 10px; border-radius: 50%;
+      background: #ff6b6b; border: 2px solid #0a0a1a;
+    }
+    #red-dot.show { display: block; }
   </style>
 </head>
 <body>
   <div class="stars"></div>
   <div id="stats">📊 今日: <span id="today-count">0</span> 条 | 总计: <span id="total-count">0</span> 条</div>
+  <div id="date-nav">
+    <button id="date-prev" onclick="shiftDate(-1)" title="前一天">‹</button>
+    <span id="date-label">今天</span>
+    <button id="date-next" onclick="shiftDate(1)" title="后一天" disabled>›</button>
+  </div>
+  <div id="toast"></div>
   <div id="ws-status" class="disconnected">🔴 离线</div>
   <div id="track-indicators">
     <div class="track-dot" data-track="0"></div><div class="track-dot" data-track="1"></div>
@@ -183,8 +238,8 @@
       </div>
       <div id="auth-body">
         <div class="auth-tabs">
-          <button class="auth-tab active" onclick="switchAuthTab('login')">登录</button>
-          <button class="auth-tab" onclick="switchAuthTab('register')">注册</button>
+          <button class="auth-tab active" onclick="switchAuthTab('login', event)">登录</button>
+          <button class="auth-tab" onclick="switchAuthTab('register', event)">注册</button>
         </div>
         <div id="auth-fields">
           <input type="text" id="auth-username" placeholder="用户名" maxlength="20" />
@@ -198,7 +253,8 @@
   </div>
 
   <div id="control-bar">
-    <div id="user-info" onclick="showAuth()">
+    <div id="user-info" onclick="onUserChipClick()">
+      <span id="red-dot"></span>
       <span id="user-avatar">?</span>
       <span id="user-name">点击登录</span>
     </div>
@@ -243,10 +299,10 @@
       document.getElementById('auth-error').textContent = '';
     }
     function closeAuth() { document.getElementById('auth-modal').classList.remove('active'); }
-    function switchAuthTab(mode) {
+    function switchAuthTab(mode, e) {
       authMode = mode;
       document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
-      event.target.classList.add('active');
+      e.target.classList.add('active');
       document.getElementById('auth-title').textContent = mode === 'login' ? '登录' : '注册';
       document.getElementById('auth-nickname').style.display = mode === 'register' ? '' : 'none';
       document.querySelector('.auth-submit').textContent = mode === 'login' ? '登录' : '注册';
@@ -323,8 +379,84 @@
       return fp;
     }
 
+    // 我的身份标识：登录用户取 uid，匿名取设备指纹（与后端 author_id 规则一致）
+    function myIdentity() {
+      return currentUser ? currentUser.id : getFingerprint();
+    }
+
+    // 轻量通知条（回复提醒等）
+    let toastTimer = null;
+    function showNotice(text) {
+      const toast = document.getElementById('toast');
+      toast.textContent = text;
+      toast.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.remove('show'), 5000);
+    }
+
+    // 账号入口：未登录弹登录框；已登录注销；点击顺带清掉回复提醒红点
+    function onUserChipClick() {
+      document.getElementById('red-dot').classList.remove('show');
+      showAuth();
+    }
+
+    // 星空背景：随机撒点 + 闪烁动画
+    function createStars() {
+      const field = document.querySelector('.stars');
+      const frag = document.createDocumentFragment();
+      for (let i = 0; i < 80; i++) {
+        const s = document.createElement('div');
+        s.className = 'star';
+        const size = (Math.random() * 1.6 + 0.6).toFixed(2);
+        s.style.width = s.style.height = size + 'px';
+        s.style.left = (Math.random() * 100).toFixed(2) + '%';
+        s.style.top = (Math.random() * 100).toFixed(2) + '%';
+        s.style.animationDuration = (Math.random() * 4 + 2.5).toFixed(2) + 's';
+        s.style.animationDelay = (-Math.random() * 6).toFixed(2) + 's';
+        frag.appendChild(s);
+      }
+      field.appendChild(frag);
+    }
+
     function escapeHtml(str) { const d = document.createElement('div'); d.textContent = str; return d.innerHTML; }
-    function formatTime(t) { const d = new Date(t); return `${d.getMonth()+1}/${d.getDate()} ${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`; }
+    // 服务端时间为 UTC（YYYY-MM-DD HH:MM:SS），转 UTC 解析后再本地显示
+    function formatTime(t) {
+      if (!t) return '';
+      const d = new Date(t.includes('T') ? t : t.replace(' ', 'T') + 'Z');
+      if (isNaN(d)) return t;
+      return `${d.getMonth()+1}/${d.getDate()} ${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`;
+    }
+
+    // === 日期浏览 ===
+    function localDateStr(d = new Date()) {
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    }
+    let viewDate = localDateStr();
+    function isToday() { return viewDate === localDateStr(); }
+    function updateDateNav(total) {
+      document.getElementById('date-label').textContent = isToday()
+        ? '今天'
+        : viewDate.slice(5).replace('-', '/');
+      document.getElementById('date-label').textContent += ` · ${total}条`;
+      document.getElementById('date-next').disabled = isToday();
+      const empty = document.getElementById('empty-state');
+      empty.querySelector('div:last-child').textContent = isToday()
+        ? '今天还没有留言，快来抢沙发！' : '这一天还没有留言';
+    }
+    async function shiftDate(n) {
+      const d = new Date(viewDate + 'T00:00:00');
+      d.setDate(d.getDate() + n);
+      const next = localDateStr(d);
+      if (next > localDateStr()) return; // 不能看未来
+      viewDate = next;
+      // 清空当前展示，重载所选日期
+      allMessages = []; displayQueue = [];
+      activeBarrages.forEach(b => { b.anim.cancel(); b.el.remove(); });
+      activeBarrages = [];
+      updateTrackIndicators();
+      await loadMessages();
+      initDisplayQueue();
+    }
 
     // === WebSocket ===
     function connectWS() {
@@ -350,6 +482,7 @@
             const knownIdx = allMessages.findIndex(m => m.id === data.id);
             if (knownIdx === -1) allMessages.unshift(data); else allMessages[knownIdx] = data;
             displayQueue.unshift(data);
+            if (isToday()) updateDateNav(allMessages.length);
             document.getElementById('empty-state').classList.add('hidden');
           } else if (type === 'new_reply') {
             const msg = allMessages.find(m => m.id === data.message_id);
@@ -357,6 +490,12 @@
               msg.replies = msg.replies || [];
               msg.replies.push(data.reply);
               msg.replies_count = (msg.replies_count || 0) + 1;
+            }
+            // 回复通知：广播里的留言作者是"我"，且不是我自己回的
+            if (data.msg_author_id && data.msg_author_id === myIdentity() && data.reply && !data.reply_is_mine) {
+              const preview = String(data.reply.content).slice(0, 24);
+              showNotice(`💬 ${data.reply.author_name} 回复了你的留言：${preview}${data.reply.content.length > 24 ? '…' : ''}`);
+              document.getElementById('red-dot').classList.add('show');
             }
           } else if (type === 'message_deleted') {
             allMessages = allMessages.filter(m => m.id !== data.id);
@@ -387,16 +526,22 @@
 
     async function loadMessages() {
       try {
-        const res = await fetch(`${API_BASE}/api/messages?limit=100`, { headers: getAuthHeaders() });
+        const res = await fetch(`${API_BASE}/api/messages?limit=100&date=${viewDate}`, { headers: getAuthHeaders() });
         const data = await res.json();
         if (data.success) {
           allMessages = data.data;
+          updateDateNav(data.pagination ? data.pagination.total : allMessages.length);
           document.getElementById('empty-state').classList.toggle('hidden', allMessages.length > 0);
         }
       } catch (e) { console.error('加载消息失败:', e); }
     }
 
-    async function loadStats() {
+    let lastStatsFetch = 0;
+    async function loadStats(force = false) {
+      // WS 事件会频繁触发，节流到 5 秒一次
+      const now = Date.now();
+      if (!force && now - lastStatsFetch < 5000) return;
+      lastStatsFetch = now;
       try {
         const res = await fetch(`${API_BASE}/api/stats`, { headers: getAuthHeaders() });
         const data = await res.json();
@@ -458,6 +603,9 @@
         <span class="content">${escapeHtml(message.content)}</span>
         <span class="author">@${escapeHtml(message.author_name)}</span>`;
       el.addEventListener('click', () => openDetail(message.id));
+      // hover 暂停，方便看清和点击；移开继续飞
+      el.addEventListener('mouseenter', () => anim.pause());
+      el.addEventListener('mouseleave', () => anim.play());
       document.getElementById('barrage-container').appendChild(el);
       const elWidth = el.offsetWidth;
       // 恒速飞行：按实际宽度算总距离和各自时长，长短留言同速且完整滑出
@@ -528,7 +676,8 @@
         if (data.success) {
           input.value = '';
           displayQueue.unshift({ ...data.data, replies: [] });
-          loadStats();
+          loadStats(true);
+          loadMessages(); // 同步日期导航计数
         } else {
           alert(data.error || '发送失败');
         }
@@ -576,6 +725,7 @@
               <button class="vote-btn like ${msg.my_vote==='like'?'active':''}" onclick="vote('message','${id}','like')">👍 <span id="msg-likes">${msg.real_likes||0}</span></button>
               <button class="vote-btn dislike ${msg.my_vote==='dislike'?'active':''}" onclick="vote('message','${id}','dislike')">👎 <span id="msg-dislikes">${msg.real_dislikes||0}</span></button>
               ${msg.mine ? `<button class="del-btn" onclick="deleteMessage('${id}')">🗑 删除</button>` : ''}
+              <button class="report-btn" onclick="reportContent('message','${id}')">⚠ 举报</button>
             </div>
           </div>
           <div class="reply-list" id="reply-list">
@@ -586,6 +736,7 @@
               <div class="actions">
                 <button class="${r.my_vote==='like'?'active':''}" onclick="vote('reply','${r.id}','like')">👍 <span id="reply-${r.id}-likes">${r.real_likes||0}</span></button>
                 <button class="${r.my_vote==='dislike'?'active':''}" onclick="vote('reply','${r.id}','dislike')">👎 <span id="reply-${r.id}-dislikes">${r.real_dislikes||0}</span></button>
+                <button class="report-mini" onclick="reportContent('reply','${r.id}')">举报</button>
               </div></div>`).join('')}
           </div>
           <div class="reply-input-area">
@@ -662,13 +813,29 @@
       } catch (e) { console.error('投票失败:', e); }
     }
 
+    // 举报留言/回复
+    async function reportContent(type, id) {
+      const reason = prompt('请填写举报理由（可留空）：');
+      if (reason === null) return; // 用户取消
+      try {
+        const res = await fetch(`${API_BASE}/api/${type === 'message' ? 'messages' : 'replies'}/${id}/report`, {
+          method: 'POST', headers: getAuthHeaders(),
+          body: JSON.stringify({ reason }),
+        });
+        const data = await res.json();
+        if (data.success) showNotice('已收到举报，我们会尽快处理');
+        else alert(data.error || '举报失败');
+      } catch (e) { alert('网络错误，请重试'); }
+    }
+
     document.getElementById('message-input').addEventListener('keypress', e => { if (e.key==='Enter') sendMessage(); });
     document.getElementById('detail-modal').addEventListener('click', e => { if (e.target===document.getElementById('detail-modal')) closeDetail(); });
     window.addEventListener('resize', () => { activeBarrages.forEach(b=>b.anim.cancel()); activeBarrages.forEach(b=>b.el.remove()); activeBarrages=[]; });
 
     (async function init() {
+      createStars();
       await checkAuth();
-      await loadMessages(); loadStats(); initDisplayQueue(); connectWS();
+      await loadMessages(); loadStats(true); initDisplayQueue(); connectWS();
       setInterval(async () => { await loadMessages(); loadStats(); }, 30000);
     })();
   </script>

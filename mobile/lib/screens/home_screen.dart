@@ -9,6 +9,7 @@ import '../services/api_service.dart';
 import '../widgets/barrage_item.dart';
 import 'detail_screen.dart';
 import 'login_screen.dart';
+import 'my_messages_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -17,7 +18,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
+class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   List<Message> _allMessages = [];
   List<Message> _displayQueue = [];
   final List<_ActiveBarrage> _activeBarrages = [];
@@ -51,6 +52,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   double _screenWidth = 400; // 每次 build 刷新，spawn 前兜底
   int _lastLaunchTimeMs = 0;
 
+  // 星空背景闪烁动画（独立于弹幕 ticker，常驻低频）
+  late final AnimationController _starCtrl;
+
+  // 回复提醒
+  String _myId = '';
+  bool _hasUnreadNotice = false;
+
   // WebSocket 实时推送
   WebSocketChannel? _ws;
   Timer? _wsRetry;
@@ -71,6 +79,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   void initState() {
     super.initState();
     _ticker = createTicker(_onTick);
+    _starCtrl = AnimationController(vsync: this, duration: const Duration(seconds: 6))..repeat();
     _connectWs();
     _loadData();
     _startPolling();
@@ -84,15 +93,18 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   Future<void> _loadSession() async {
     final logged = await ApiService.isLoggedIn();
     final user = await ApiService.getSession();
+    final myId = await ApiService.myIdentity();
     if (!mounted) return;
     setState(() {
       _loggedIn = logged;
       _nickname = (user?['nickname'] as String?) ?? '';
       _avatarColor = (user?['avatar_color'] as String?) ?? '#48dbfb';
+      _myId = myId;
     });
   }
 
   Future<void> _openAccount() async {
+    if (_hasUnreadNotice) setState(() => _hasUnreadNotice = false);
     if (!_loggedIn) {
       final okLogin = await Navigator.push<bool>(
         context,
@@ -157,6 +169,25 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               ),
               const SizedBox(height: 20),
               OutlinedButton.icon(
+                onPressed: () {
+                  Navigator.pop(sheetCtx);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const MyMessagesScreen()),
+                  );
+                },
+                icon: const Icon(Icons.forum_outlined, size: 18),
+                label: const Text('我的留言'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF48dbfb),
+                  side: BorderSide(color: const Color(0xFF48dbfb).withOpacity(0.4)),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+              const SizedBox(height: 10),
+              OutlinedButton.icon(
                 onPressed: () async {
                   Navigator.pop(sheetCtx);
                   await ApiService.logout();
@@ -195,6 +226,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     _wsRetry?.cancel();
     _ws?.sink.close();
     _ticker.dispose();
+    _starCtrl.dispose();
     _tickFrame.dispose();
     super.dispose();
   }
@@ -282,6 +314,14 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               mine: _allMessages[idx].mine,
               replies: [..._allMessages[idx].replies, Reply.fromJson(reply)],
             );
+          }
+          // 回复提醒：广播里的留言作者是"我"，且不是我自己回的
+          final msgAuthorId = data['msg_author_id'];
+          if (msgAuthorId is String &&
+              msgAuthorId.isNotEmpty &&
+              msgAuthorId == _myId &&
+              data['reply_is_mine'] != true) {
+            _showReplyNotice(reply);
           }
           break;
         case 'message_deleted':
@@ -403,20 +443,24 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   void _launchOneNow({Message? direct}) {
     if (!mounted) return;
     if (_activeBarrages.length >= _maxOnScreen) return;
+    final track = _getAvailableTrack();
+    if (track == null) {
+      // 满轨：直接发布的留言排队头等空位，其余下个调度周期再试
+      if (direct != null) _displayQueue.insert(0, direct);
+      return;
+    }
     final Message msg;
     if (direct != null) {
       msg = direct;
-      _displayedIds.add(msg.id);
     } else {
       if (_displayQueue.isEmpty) return;
       msg = _displayQueue.removeAt(0);
-      _displayedIds.add(msg.id);
     }
-    _addActive(msg);
+    _displayedIds.add(msg.id);
+    _addActive(msg, track);
   }
 
-  void _addActive(Message msg) {
-    final track = _getAvailableTrack();
+  void _addActive(Message msg, int track) {
     final w = _estimateWidth(msg.content, msg.authorName);
     final distance = _screenWidth + w + 60;
     var durationMs = (distance / _speedPxPerMs).round();
@@ -448,15 +492,26 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     return w.clamp(120.0, maxW);
   }
 
-  int _getAvailableTrack() {
+  /// 空闲轨道；全部占用时返回 null（不再随机复用忙轨道，避免弹幕重叠）
+  int? _getAvailableTrack() {
     final busyTracks = _activeBarrages.map((b) => b.track).toSet();
     final available = List.generate(_trackCount, (i) => i)
         .where((t) => !busyTracks.contains(t))
         .toList();
-    if (available.isNotEmpty) {
-      return available[Random().nextInt(available.length)];
-    }
-    return Random().nextInt(_trackCount);
+    if (available.isEmpty) return null;
+    return available[Random().nextInt(available.length)];
+  }
+
+  void _showReplyNotice(Map<String, dynamic> reply) {
+    if (!mounted) return;
+    setState(() => _hasUnreadNotice = true);
+    final name = (reply['author_name'] ?? '有人').toString();
+    final content = (reply['content'] ?? '').toString();
+    final preview = content.length > 24 ? '${content.substring(0, 24)}…' : content;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('💬 $name 回复了你的留言：$preview'),
+      duration: const Duration(seconds: 4),
+    ));
   }
 
   void _openDetail(Message msg) {
@@ -598,16 +653,23 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 ),
               ),
 
-              // 星空背景
+              // 星空背景 + 闪烁星星
               Positioned.fill(
-                child: Container(
-                  decoration: const BoxDecoration(
-                    gradient: RadialGradient(
-                      center: Alignment(0, -0.3),
-                      radius: 1.2,
-                      colors: [Color(0xFF1a1a3e), Color(0xFF0a0a1a)],
+                child: Stack(
+                  children: [
+                    Container(
+                      decoration: const BoxDecoration(
+                        gradient: RadialGradient(
+                          center: Alignment(0, -0.3),
+                          radius: 1.2,
+                          colors: [Color(0xFF1a1a3e), Color(0xFF0a0a1a)],
+                        ),
+                      ),
                     ),
-                  ),
+                    Positioned.fill(
+                      child: CustomPaint(painter: _StarFieldPainter(_starCtrl)),
+                    ),
+                  ],
                 ),
               ),
 
@@ -651,6 +713,16 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
+                        if (_hasUnreadNotice)
+                          Container(
+                            width: 8,
+                            height: 8,
+                            margin: const EdgeInsets.only(right: 2),
+                            decoration: const BoxDecoration(
+                              color: Color(0xFFFF6B6B),
+                              shape: BoxShape.circle,
+                            ),
+                          ),
                         Icon(
                           _loggedIn
                               ? Icons.verified_user_rounded
@@ -761,4 +833,44 @@ class _ActiveBarrage {
     required this.durationMs,
     required this.distanceX,
   });
+}
+
+class _Star {
+  final double x, y, radius, phase, speed;
+  _Star(this.x, this.y, this.radius, this.phase, this.speed);
+}
+
+/// 闪烁星空：位置用固定种子生成保证稳定，透明度按相位正弦波动
+class _StarFieldPainter extends CustomPainter {
+  _StarFieldPainter(Animation<double> animation)
+      : _animation = animation,
+        super(repaint: animation);
+
+  final Animation<double> _animation;
+
+  static final List<_Star> _stars = () {
+    final rng = Random(42);
+    return List.generate(70, (_) => _Star(
+          rng.nextDouble(),
+          rng.nextDouble(),
+          0.5 + rng.nextDouble() * 1.1,
+          rng.nextDouble(),
+          0.3 + rng.nextDouble() * 0.8,
+        ));
+  }();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final t = _animation.value; // 0..1 循环（6 秒一周）
+    final paint = Paint();
+    for (final s in _stars) {
+      final opacity =
+          0.10 + 0.65 * (0.5 + 0.5 * sin(2 * pi * (t * s.speed + s.phase)));
+      paint.color = Colors.white.withOpacity(opacity.clamp(0.05, 0.85));
+      canvas.drawCircle(Offset(s.x * size.width, s.y * size.height), s.radius, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

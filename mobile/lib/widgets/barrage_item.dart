@@ -91,7 +91,14 @@ class BarrageItem extends StatelessWidget {
             Flexible(
               child: Text(
                 message.content,
-                style: TextStyle(color: color, fontSize: 14),
+                style: TextStyle(
+                  color: color,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  shadows: const [
+                    Shadow(color: Colors.black45, blurRadius: 4, offset: Offset(0, 1)),
+                  ],
+                ),
                 overflow: TextOverflow.ellipsis,
                 maxLines: 1,
               ),
@@ -102,6 +109,9 @@ class BarrageItem extends StatelessWidget {
               style: TextStyle(
                 color: color.withOpacity(0.6),
                 fontSize: 10,
+                shadows: const [
+                  Shadow(color: Colors.black45, blurRadius: 3, offset: Offset(0, 1)),
+                ],
               ),
             ),
             if (message.likesCount > 0) ...[

@@ -1,7 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
-const { db, generateFingerprint, randomColor, randomNickname, verifyToken } = require('../db');
+const { db, generateFingerprint, randomColor, randomNickname, verifyToken, tintBg } = require('../db');
+const { maskBannedWords } = require('../moderation');
 
 // 获取 WebSocket 广播函数
 function getBroadcast(req) {
@@ -11,6 +12,27 @@ function getBroadcast(req) {
 function getAuthPayload(req) {
   const auth = req.headers.authorization;
   return auth && auth.startsWith('Bearer ') ? verifyToken(auth.substring(7)) : null;
+}
+
+// 展示时区（默认东八区）。created_at/expire_at 均以 UTC 存储，
+// "今日" 的日期边界按展示时区换算回 UTC 再查询，避免凌晨时段查错日期。
+const TZ_OFFSET_HOURS = (() => {
+  const n = Number(process.env.DISPLAY_TZ_OFFSET);
+  return Number.isFinite(n) ? n : 8;
+})();
+
+// 展示时区的"今天"（YYYY-MM-DD）
+function todayInDisplayTz() {
+  return new Date(Date.now() + TZ_OFFSET_HOURS * 3600 * 1000).toISOString().split('T')[0];
+}
+
+// 展示时区某日 [00:00, +1day) 对应的 UTC 边界（dateStr 已由 isValidDate 校验）
+function utcBoundsForLocalDate(dateStr) {
+  const base = `${dateStr} 00:00:00`;
+  return {
+    start: `datetime('${base}', '${-TZ_OFFSET_HOURS} hours')`,
+    end: `datetime('${base}', '${24 - TZ_OFFSET_HOURS} hours')`,
+  };
 }
 
 function isValidDate(value) {
@@ -31,19 +53,36 @@ function isValidBgColor(value) {
   );
 }
 
-// 获取今天的留言列表（分页）
+// 获取留言列表（分页）。默认今日；mine=1 时查询当前登录用户的全部留言
 router.get('/messages', (req, res) => {
   try {
+    const tokenPayload = getAuthPayload(req);
+    const mineOnly = req.query.mine === '1';
+
+    if (mineOnly && !tokenPayload) {
+      return res.status(401).json({ success: false, error: '请登录后查看自己的留言' });
+    }
+
+    let whereClause, queryParams;
+    if (mineOnly) {
+      whereClause = 'm.author_id = ? AND m.deleted_at IS NULL';
+      queryParams = [tokenPayload.uid];
+    } else {
+      const requestedDate = req.query.date || todayInDisplayTz();
+      if (!isValidDate(requestedDate)) {
+        return res.status(400).json({ success: false, error: '日期格式应为 YYYY-MM-DD' });
+      }
+      const bounds = utcBoundsForLocalDate(requestedDate);
+      whereClause = `m.created_at >= ${bounds.start} AND m.created_at < ${bounds.end} AND m.deleted_at IS NULL
+        AND (m.expire_at IS NULL OR datetime(m.expire_at) > datetime('now'))`;
+      queryParams = [];
+    }
+
+    const fp = tokenPayload ? tokenPayload.uid : generateFingerprint(req);
     const {
-      date: requestedDate = new Date().toISOString().split('T')[0],
       limit = 20,
       offset = 0,
     } = req.query;
-    if (!isValidDate(requestedDate)) {
-      return res.status(400).json({ success: false, error: '日期格式应为 YYYY-MM-DD' });
-    }
-    const tokenPayload = getAuthPayload(req);
-    const fp = tokenPayload ? tokenPayload.uid : generateFingerprint(req);
 
     const safeLimit = Math.max(1, Math.min(parseInt(limit) || 20, 100));
     const safeOffset = Math.max(parseInt(offset) || 0, 0);
@@ -56,11 +95,10 @@ router.get('/messages', (req, res) => {
         mv.vote_type as my_vote
       FROM messages m
       LEFT JOIN votes mv ON mv.target_type='message' AND mv.target_id=m.id AND mv.user_fingerprint=?
-      WHERE m.created_at >= ? AND m.created_at < datetime(?, '+1 day') AND m.deleted_at IS NULL
-        AND (m.expire_at IS NULL OR datetime(m.expire_at) > datetime('now'))
+      WHERE ${whereClause}
       ORDER BY m.is_pinned DESC, m.created_at DESC
       LIMIT ? OFFSET ?
-    `).all(fp, `${requestedDate} 00:00:00`, requestedDate, safeLimit, safeOffset);
+    `).all(fp, ...queryParams, safeLimit, safeOffset);
 
     const repliesByMessage = new Map(messages.map(message => [message.id, []]));
     if (messages.length > 0) {
@@ -80,10 +118,8 @@ router.get('/messages', (req, res) => {
     const result = messages.map(message => ({ ...message, replies: repliesByMessage.get(message.id) }));
 
     const total = db.prepare(`
-      SELECT COUNT(*) as count FROM messages
-      WHERE created_at >= ? AND created_at < datetime(?, '+1 day') AND deleted_at IS NULL
-        AND (expire_at IS NULL OR datetime(expire_at) > datetime('now'))
-    `).get(`${requestedDate} 00:00:00`, requestedDate).count;
+      SELECT COUNT(*) as count FROM messages m WHERE ${whereClause}
+    `).get(...queryParams).count;
 
     res.json({
       success: true,
@@ -166,7 +202,7 @@ router.post('/messages', (req, res) => {
     const validMoods = ['happy', 'neutral', 'sad', 'angry', 'excited', 'calm'];
     const id = uuidv4();
     const finalMood = validMoods.includes(mood) ? mood : 'neutral';
-    const safeContent = content.trim();
+    const safeContent = maskBannedWords(content.trim());
 
     // 检查是否已登录
     const tokenPayload = getAuthPayload(req);
@@ -174,16 +210,16 @@ router.post('/messages', (req, res) => {
     let finalName, finalColor, finalBgColor;
 
     if (tokenPayload) {
-      // 已登录：用真实昵称和头像颜色
+      // 已登录：用真实昵称和头像颜色，底色跟随头像色
       const user = db.prepare('SELECT nickname, avatar_color FROM users WHERE id = ?').get(tokenPayload.uid);
       if (user) {
         finalName = user.nickname;
         finalColor = user.avatar_color;
-        finalBgColor = 'rgba(0,0,0,0.6)';
+        finalBgColor = tintBg(user.avatar_color, 0.16);
       } else {
         finalName = randomNickname();
         finalColor = randomColor();
-        finalBgColor = 'rgba(0,0,0,0.6)';
+        finalBgColor = tintBg(finalColor, 0.16);
       }
     } else {
       // 未登录：匿名发布
@@ -191,7 +227,7 @@ router.post('/messages', (req, res) => {
         ? randomNickname()
         : author_name.trim().slice(0, 20);
       finalColor = isValidColor(color) ? color : randomColor();
-      finalBgColor = isValidBgColor(bg_color) ? bg_color : 'rgba(0,0,0,0.6)';
+      finalBgColor = isValidBgColor(bg_color) ? bg_color : tintBg(finalColor, 0.16);
     }
 
     let expireAt = null;
@@ -236,11 +272,11 @@ router.post('/messages/:id/reply', (req, res) => {
       return res.status(400).json({ success: false, error: '回复最多500字' });
     }
 
-    const msg = db.prepare("SELECT id FROM messages WHERE id = ? AND deleted_at IS NULL AND (expire_at IS NULL OR datetime(expire_at) > datetime('now'))").get(req.params.id);
+    const msg = db.prepare("SELECT id, author_id FROM messages WHERE id = ? AND deleted_at IS NULL AND (expire_at IS NULL OR datetime(expire_at) > datetime('now'))").get(req.params.id);
     if (!msg) return res.status(404).json({ success: false, error: '留言不存在' });
 
     const id = uuidv4();
-    const safeContent = content.trim();
+    const safeContent = maskBannedWords(content.trim());
 
     // 检查是否已登录
     const tokenPayload = getAuthPayload(req);
@@ -266,10 +302,17 @@ router.post('/messages/:id/reply', (req, res) => {
     });
     insertReply();
 
-    const newReply = db.prepare('SELECT id, message_id, content, author_name, created_at FROM replies WHERE id = ?').get(id);
+    const newReplyRow = db.prepare('SELECT id, message_id, content, author_name, author_id, created_at FROM replies WHERE id = ?').get(id);
+    // 对外广播不含回复者指纹，仅以布尔标记"回复者是否就是留言作者"
+    const { author_id: _replyAuthorId, ...newReply } = newReplyRow;
 
-    // 广播新回复
-    getBroadcast(req)('new_reply', { message_id: req.params.id, reply: newReply });
+    // 广播新回复；msg_author_id + reply_is_mine 供各客户端判断"是不是别人回复了我的留言"
+    getBroadcast(req)('new_reply', {
+      message_id: req.params.id,
+      reply: newReply,
+      msg_author_id: msg.author_id || null,
+      reply_is_mine: !!newReplyRow.author_id && newReplyRow.author_id === msg.author_id,
+    });
 
     res.json({ success: true, data: newReply });
   } catch (err) {
@@ -369,6 +412,38 @@ router.post('/replies/:id/vote', (req, res) => {
   }
 });
 
+// 举报留言/回复（匿名可举报，记录指纹便于风控；管理端查 reports 表处理）
+function createReportHandler(targetType) {
+  return (req, res) => {
+    try {
+      const targetId = req.params.id;
+      const table = targetType === 'message' ? 'messages' : 'replies';
+      const target = db.prepare(`SELECT id FROM ${table} WHERE id = ? AND deleted_at IS NULL`).get(targetId);
+      if (!target) return res.status(404).json({ success: false, error: '内容不存在' });
+
+      const reason = typeof req.body.reason === 'string' ? req.body.reason.trim().slice(0, 200) : '';
+      const fp = getAuthPayload(req)?.uid || generateFingerprint(req);
+
+      // 同一身份对同一内容只记一次
+      const dup = db.prepare(
+        'SELECT id FROM reports WHERE target_type=? AND target_id=? AND reporter_fingerprint=?'
+      ).get(targetType, targetId, fp);
+      if (dup) return res.json({ success: true, data: { reported: true, duplicate: true } });
+
+      db.prepare(
+        'INSERT INTO reports (target_type, target_id, reason, reporter_fingerprint) VALUES (?, ?, ?, ?)'
+      ).run(targetType, targetId, reason, fp);
+
+      res.json({ success: true, data: { reported: true } });
+    } catch (err) {
+      console.error('举报失败:', err);
+      res.status(500).json({ success: false, error: '举报失败' });
+    }
+  };
+}
+router.post('/messages/:id/report', createReportHandler('message'));
+router.post('/replies/:id/report', createReportHandler('reply'));
+
 // 删除留言（软删除，仅限作者本人）
 router.delete('/messages/:id', (req, res) => {
   try {
@@ -397,11 +472,13 @@ router.delete('/messages/:id', (req, res) => {
 // 获取统计数据
 router.get('/stats', (req, res) => {
   try {
-    const today = new Date().toISOString().split('T')[0];
+    // "今日" 按展示时区换算回 UTC 边界
+    const today = todayInDisplayTz();
+    const bounds = utcBoundsForLocalDate(today);
     const totalMessages = db.prepare("SELECT COUNT(*) as count FROM messages WHERE deleted_at IS NULL AND (expire_at IS NULL OR datetime(expire_at) > datetime('now'))").get().count;
-    const todayMessages = db.prepare("SELECT COUNT(*) as count FROM messages WHERE created_at >= ? AND created_at < datetime(?, '+1 day') AND deleted_at IS NULL AND (expire_at IS NULL OR datetime(expire_at) > datetime('now'))").get(`${today} 00:00:00`, today).count;
+    const todayMessages = db.prepare(`SELECT COUNT(*) as count FROM messages WHERE created_at >= ${bounds.start} AND created_at < ${bounds.end} AND deleted_at IS NULL AND (expire_at IS NULL OR datetime(expire_at) > datetime('now'))`).get().count;
     const totalReplies = db.prepare("SELECT COUNT(*) as count FROM replies WHERE deleted_at IS NULL").get().count;
-    const todayReplies = db.prepare("SELECT COUNT(*) as count FROM replies WHERE date(created_at) = ? AND deleted_at IS NULL").get(today).count;
+    const todayReplies = db.prepare(`SELECT COUNT(*) as count FROM replies WHERE created_at >= ${bounds.start} AND created_at < ${bounds.end} AND deleted_at IS NULL`).get().count;
 
     res.json({
       success: true,

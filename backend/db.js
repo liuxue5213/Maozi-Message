@@ -61,12 +61,23 @@ db.exec(`
     created_at TEXT DEFAULT (datetime('now'))
   );
 
+  -- 举报记录（供管理端核查，不对外暴露）
+  CREATE TABLE IF NOT EXISTS reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_type TEXT NOT NULL CHECK(target_type IN ('message', 'reply')),
+    target_id TEXT NOT NULL,
+    reason TEXT DEFAULT '',
+    reporter_fingerprint TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
   -- 创建索引加速查询
   CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_messages_expire ON messages(expire_at);
   CREATE INDEX IF NOT EXISTS idx_replies_message ON replies(message_id);
   CREATE INDEX IF NOT EXISTS idx_votes_target ON votes(target_type, target_id);
   CREATE INDEX IF NOT EXISTS idx_votes_user_target ON votes(user_fingerprint, target_type, target_id);
+  CREATE INDEX IF NOT EXISTS idx_reports_target ON reports(target_type, target_id);
 `);
 
 // 输入过滤：防 XSS
@@ -159,6 +170,13 @@ function verifyToken(token) {
   }
 }
 
+// 弹幕底色：跟随文字色的低透明度版本，深色页面上更有层次
+function tintBg(hex, alpha) {
+  if (!/^#[0-9a-fA-F]{6}$/.test(hex)) return 'rgba(0,0,0,0.6)';
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
+}
+
 module.exports = {
   db,
   generateFingerprint,
@@ -169,4 +187,5 @@ module.exports = {
   verifyPassword,
   generateToken,
   verifyToken,
+  tintBg,
 };

@@ -213,10 +213,66 @@ class _DetailScreenState extends State<DetailScreen> {
 
   String _formatTime(String t) {
     try {
-      final d = DateTime.parse(t);
+      // 服务端时间为 UTC（YYYY-MM-DD HH:MM:SS），补 Z 后按 UTC 解析再本地显示
+      final d = DateTime.parse(
+        t.endsWith('Z') || t.contains('+') ? t : t.replaceFirst(' ', 'T') + 'Z',
+      );
       return '${d.month}/${d.day} ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
     } catch (_) {
       return t;
+    }
+  }
+
+  Future<void> _report(String type, String id) async {
+    if (_isLocalPreview) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('示例留言，暂不支持互动')),
+      );
+      return;
+    }
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (ctx) {
+        final controller = TextEditingController();
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1e1e3a),
+          title: const Text('举报', style: TextStyle(color: Colors.white, fontSize: 17)),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            maxLength: 200,
+            style: const TextStyle(color: Colors.white),
+            decoration: const InputDecoration(
+              hintText: '举报理由（可留空）',
+              hintStyle: TextStyle(color: Colors.white24),
+              counterStyle: TextStyle(color: Colors.white24, fontSize: 10),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('取消', style: TextStyle(color: Colors.white54)),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+              child: const Text('提交', style: TextStyle(color: Color(0xFF48dbfb))),
+            ),
+          ],
+        );
+      },
+    );
+    if (reason == null || !mounted) return; // 取消
+    try {
+      await ApiService.report(type: type, id: id, reason: reason);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('已收到举报，我们会尽快处理')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('举报失败: $e')),
+      );
     }
   }
 
@@ -228,6 +284,13 @@ class _DetailScreenState extends State<DetailScreen> {
         backgroundColor: const Color(0xFF1e1e3a),
         title: const Text('留言详情', style: TextStyle(color: Colors.white)),
         iconTheme: const IconThemeData(color: Colors.white),
+        actions: [
+          IconButton(
+            onPressed: _message == null ? null : () => _report('message', _message!.id),
+            icon: const Icon(Icons.flag_outlined, color: Colors.white38, size: 20),
+            tooltip: '举报',
+          ),
+        ],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator(color: Color(0xFF48dbfb)))
@@ -385,6 +448,21 @@ class _DetailScreenState extends State<DetailScreen> {
                                 reply.dislikesCount,
                                 reply.myVote == 'dislike',
                                 () => _voteReply(reply.id, 'dislike'),
+                              ),
+                              const SizedBox(width: 8),
+                              GestureDetector(
+                                onTap: () => _report('reply', reply.id),
+                                child: const Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.flag_outlined,
+                                        size: 12, color: Colors.white24),
+                                    SizedBox(width: 2),
+                                    Text('举报',
+                                        style: TextStyle(
+                                            color: Colors.white24, fontSize: 11)),
+                                  ],
+                                ),
                               ),
                             ],
                           ),
