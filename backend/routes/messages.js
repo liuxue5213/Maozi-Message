@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
-const { db, generateFingerprint, serverFingerprint, randomColor, randomNickname, verifyToken, tintBg } = require('../db');
+const { db, generateFingerprint, serverFingerprint, randomColor, randomNickname, verifyToken, verifyTokenVersion, tintBg } = require('../db');
 const { maskBannedWords } = require('../moderation');
 
 // 获取 WebSocket 广播函数
@@ -11,7 +11,11 @@ function getBroadcast(req) {
 
 function getAuthPayload(req) {
   const auth = req.headers.authorization;
-  return auth && auth.startsWith('Bearer ') ? verifyToken(auth.substring(7)) : null;
+  const payload = auth && auth.startsWith('Bearer ') ? verifyToken(auth.substring(7)) : null;
+  if (!payload) return null;
+  const row = db.prepare('SELECT token_version FROM users WHERE id = ?').get(payload.uid);
+  if (!row) return null;
+  return verifyTokenVersion(payload, row.token_version) ? payload : null;
 }
 
 // 展示时区（默认东八区）。created_at/expire_at 均以 UTC 存储，

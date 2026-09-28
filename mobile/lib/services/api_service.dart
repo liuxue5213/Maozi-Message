@@ -147,6 +147,21 @@ class ApiService {
     return _finishAuth(res);
   }
 
+  /// 修改密码。服务端吊销所有旧 token 并签发新 token，会话整体替换。
+  static Future<Map<String, dynamic>> changePassword({
+    required String oldPassword,
+    required String newPassword,
+  }) async {
+    final res = await http
+        .post(
+          Uri.parse('$baseUrl/auth/change-password'),
+          headers: await _headers(jsonBody: true),
+          body: jsonEncode({'old_password': oldPassword, 'new_password': newPassword}),
+        )
+        .timeout(_timeout);
+    return _finishAuth(res);
+  }
+
   // ---------- 留言 ----------
 
   /// 当前身份标识：登录用户取 uid，匿名取设备指纹（与后端 author_id 规则一致）

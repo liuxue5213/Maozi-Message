@@ -58,6 +58,7 @@ db.exec(`
     password_hash TEXT NOT NULL,
     nickname TEXT NOT NULL,
     avatar_color TEXT DEFAULT '#48dbfb',
+    token_version INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now'))
   );
 
@@ -79,6 +80,13 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_votes_user_target ON votes(user_fingerprint, target_type, target_id);
   CREATE INDEX IF NOT EXISTS idx_reports_target ON reports(target_type, target_id);
 `);
+
+// 旧库迁移：users.token_version（修改密码后吊销全部旧 token 用）
+const userCols = db.pragma('table_info(users)');
+if (!userCols.some(c => c.name === 'token_version')) {
+  db.exec("ALTER TABLE users ADD COLUMN token_version INTEGER DEFAULT 0");
+  console.log('🛠 users 表已迁移：新增 token_version 列');
+}
 
 // 输入过滤：防 XSS
 function sanitize(str) {
@@ -153,14 +161,14 @@ function verifyPassword(password, stored) {
   }
 }
 
-// 简单 Token（HMAC 签名 + Base64）
+// 简单 Token（HMAC 签名 + Base64）。ver 为 token_version，修改密码后旧版本全部失效
 if (process.env.NODE_ENV === 'production' && !process.env.TOKEN_SECRET) {
   throw new Error('生产环境必须设置 TOKEN_SECRET');
 }
 const TOKEN_SECRET = process.env.TOKEN_SECRET || 'development-only-secret';
 
-function generateToken(userId, username, nickname) {
-  const payload = JSON.stringify({ uid: userId, usr: username, nick: nickname, exp: Date.now() + 7 * 24 * 3600 * 1000 });
+function generateToken(userId, username, nickname, ver = 0) {
+  const payload = JSON.stringify({ uid: userId, usr: username, nick: nickname, ver, exp: Date.now() + 7 * 24 * 3600 * 1000 });
   const payloadB64 = Buffer.from(payload).toString('base64url');
   const sig = crypto.createHmac('sha256', TOKEN_SECRET).update(payloadB64).digest('base64url');
   return payloadB64 + '.' + sig;
@@ -174,10 +182,16 @@ function verifyToken(token) {
     if (!sig || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expectedSig))) return null;
     const payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString());
     if (payload.exp < Date.now()) return null;
+    payload.ver = payload.ver ?? 0; // 老版本 token 视为 ver 0，与默认列值兼容
     return payload;
   } catch (_) {
     return null;
   }
+}
+
+// 校验 token 且版本号与用户当前 token_version 一致（改密后旧 token 全部失效）
+function verifyTokenVersion(payload, currentVersion) {
+  return !!payload && (payload.ver ?? 0) === (currentVersion || 0);
 }
 
 // 弹幕底色：跟随文字色的低透明度版本，深色页面上更有层次
@@ -198,5 +212,6 @@ module.exports = {
   verifyPassword,
   generateToken,
   verifyToken,
+  verifyTokenVersion,
   tintBg,
 };

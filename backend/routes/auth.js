@@ -1,7 +1,17 @@
 const express = require('express');
 const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
-const { db, hashPassword, verifyPassword, generateToken, verifyToken, randomColor, serverFingerprint } = require('../db');
+const { db, hashPassword, verifyPassword, generateToken, verifyToken, verifyTokenVersion, randomColor, serverFingerprint } = require('../db');
+
+// 解析并校验 Authorization 头；token 版本号必须与用户当前 token_version 一致
+function getAuthPayload(req) {
+  const auth = req.headers.authorization;
+  const payload = auth && auth.startsWith('Bearer ') ? verifyToken(auth.substring(7)) : null;
+  if (!payload) return null;
+  const row = db.prepare('SELECT token_version FROM users WHERE id = ?').get(payload.uid);
+  if (!row) return null;
+  return verifyTokenVersion(payload, row.token_version) ? payload : null;
+}
 
 // 登录时把该设备此前的匿名投票并入登录账号。
 // 同一内容登录账号已投过的：丢弃匿名票；其余匿名票归账。
@@ -55,7 +65,7 @@ router.post('/register', (req, res) => {
       VALUES (?, ?, ?, ?, ?)
     `).run(id, username.trim(), hashPassword(password), nickname.trim(), color);
 
-    const token = generateToken(id, username.trim(), nickname.trim());
+    const token = generateToken(id, username.trim(), nickname.trim(), 0);
 
     res.json({
       success: true,
@@ -90,7 +100,7 @@ router.post('/login', (req, res) => {
       : null;
     mergeAnonVotesToUser(user.id, [clientFp, serverFingerprint(req)]);
 
-    const token = generateToken(user.id, user.username, user.nickname);
+    const token = generateToken(user.id, user.username, user.nickname, user.token_version || 0);
 
     res.json({
       success: true,
@@ -108,8 +118,7 @@ router.post('/login', (req, res) => {
 // 更新资料（昵称/头像颜色）。签发新 token（内含昵称）并返回，客户端整体替换会话。
 router.patch('/profile', (req, res) => {
   try {
-    const auth = req.headers.authorization;
-    const payload = auth && auth.startsWith('Bearer ') ? verifyToken(auth.substring(7)) : null;
+    const payload = getAuthPayload(req);
     if (!payload) {
       return res.status(401).json({ success: false, error: '未登录' });
     }
@@ -128,7 +137,7 @@ router.patch('/profile', (req, res) => {
       return res.status(401).json({ success: false, error: '用户不存在' });
     }
 
-    const token = generateToken(payload.uid, payload.usr, nickname.trim());
+    const token = generateToken(payload.uid, payload.usr, nickname.trim(), payload.ver);
     res.json({
       success: true,
       data: {
@@ -142,15 +151,50 @@ router.patch('/profile', (req, res) => {
   }
 });
 
+// 修改密码：验证原密码 → 更新哈希 → token_version+1，所有旧 token（含其他设备）立即失效
+router.post('/change-password', (req, res) => {
+  try {
+    const payload = getAuthPayload(req);
+    if (!payload) {
+      return res.status(401).json({ success: false, error: '未登录' });
+    }
+
+    const { old_password, new_password } = req.body;
+    if (typeof new_password !== 'string' || new_password.length < 6) {
+      return res.status(400).json({ success: false, error: '新密码至少 6 位' });
+    }
+
+    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(payload.uid);
+    if (!user) {
+      return res.status(401).json({ success: false, error: '用户不存在' });
+    }
+    if (!verifyPassword(typeof old_password === 'string' ? old_password : '', user.password_hash)) {
+      return res.status(400).json({ success: false, error: '原密码错误' });
+    }
+
+    const newVersion = (user.token_version || 0) + 1;
+    db.prepare('UPDATE users SET password_hash = ?, token_version = ? WHERE id = ?')
+      .run(hashPassword(new_password), newVersion, user.id);
+
+    const token = generateToken(user.id, user.username, user.nickname, newVersion);
+    res.json({
+      success: true,
+      data: {
+        token,
+        user: { id: user.id, username: user.username, nickname: user.nickname, avatar_color: user.avatar_color },
+      },
+    });
+  } catch (err) {
+    console.error('修改密码失败:', err);
+    res.status(500).json({ success: false, error: '修改失败' });
+  }
+});
+
 // 获取当前用户信息
 router.get('/me', (req, res) => {
-  const auth = req.headers.authorization;
-  if (!auth || !auth.startsWith('Bearer ')) {
-    return res.status(401).json({ success: false, error: '未登录' });
-  }
-  const payload = verifyToken(auth.substring(7));
+  const payload = getAuthPayload(req);
   if (!payload) {
-    return res.status(401).json({ success: false, error: '登录已过期' });
+    return res.status(401).json({ success: false, error: '未登录' });
   }
   const user = db.prepare('SELECT id, username, nickname, avatar_color FROM users WHERE id = ?').get(payload.uid);
   if (!user) {

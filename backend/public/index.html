@@ -212,6 +212,20 @@
       color: #ff6b6b;
     }
     .profile-logout:hover { background: rgba(255,107,107,0.2); }
+    .pwd-toggle {
+      width: 100%; padding: 7px; margin-top: 10px;
+      background: none; border: none; cursor: pointer;
+      color: rgba(255,255,255,0.55); font-size: 13px;
+    }
+    .pwd-toggle:hover { color: #48dbfb; }
+    #pwd-section { margin-top: 6px; padding-top: 6px; border-top: 1px dashed rgba(255,255,255,0.12); }
+    #pwd-section input {
+      width: 100%; padding: 10px 14px; margin-bottom: 10px;
+      border-radius: 10px; border: 1px solid rgba(255,255,255,0.15);
+      background: rgba(255,255,255,0.06); color: #fff; font-size: 14px;
+      outline: none; box-sizing: border-box;
+    }
+    #pwd-section input:focus { border-color: #5f27cd; }
     #user-info {
       display: flex; align-items: center; gap: 8px;
       padding: 6px 12px; border-radius: 20px;
@@ -295,6 +309,13 @@
       <div id="profile-colors" class="color-palette"></div>
       <div id="profile-error" class="auth-error"></div>
       <button class="auth-submit" onclick="saveProfile()">保存</button>
+      <button class="pwd-toggle" onclick="togglePwdSection()">修改密码 ›</button>
+      <div id="pwd-section" style="display:none;">
+        <input type="password" id="pwd-old" placeholder="原密码" maxlength="30" autocomplete="current-password" />
+        <input type="password" id="pwd-new" placeholder="新密码（至少 6 位）" maxlength="30" autocomplete="new-password" />
+        <div id="pwd-error" class="auth-error"></div>
+        <button class="auth-submit" style="background:#5f27cd;" onclick="changePassword()">确认修改</button>
+      </div>
       <button class="profile-logout" onclick="logout(); closeProfile(); updateUserUI();">退出登录</button>
     </div>
   </div>
@@ -927,6 +948,40 @@
         if (data.success) showNotice('已收到举报，我们会尽快处理');
         else alert(data.error || '举报失败');
       } catch (e) { alert('网络错误，请重试'); }
+    }
+
+    function togglePwdSection() {
+      const sec = document.getElementById('pwd-section');
+      const show = sec.style.display === 'none';
+      sec.style.display = show ? '' : 'none';
+      if (show) { document.getElementById('pwd-error').textContent = ''; }
+    }
+
+    async function changePassword() {
+      const oldPw = document.getElementById('pwd-old').value;
+      const newPw = document.getElementById('pwd-new').value;
+      const errEl = document.getElementById('pwd-error');
+      errEl.textContent = '';
+      if (!oldPw || !newPw) { errEl.textContent = '请填写原密码和新密码'; return; }
+      if (newPw.length < 6) { errEl.textContent = '新密码至少 6 位'; return; }
+      try {
+        const res = await fetch(`${API_BASE}/api/auth/change-password`, {
+          method: 'POST', headers: getAuthHeaders(),
+          body: JSON.stringify({ old_password: oldPw, new_password: newPw }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          authToken = data.data.token;
+          currentUser = data.data.user;
+          localStorage.setItem('mz_token', authToken);
+          document.getElementById('pwd-old').value = '';
+          document.getElementById('pwd-new').value = '';
+          togglePwdSection();
+          showNotice('密码已修改，其他设备需重新登录');
+        } else {
+          errEl.textContent = data.error || '修改失败';
+        }
+      } catch (e) { errEl.textContent = '网络错误，请重试'; }
     }
 
     document.getElementById('message-input').addEventListener('keypress', e => { if (e.key==='Enter') sendMessage(); });

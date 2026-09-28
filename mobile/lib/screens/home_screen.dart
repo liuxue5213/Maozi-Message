@@ -193,6 +193,22 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               OutlinedButton.icon(
                 onPressed: () {
                   Navigator.pop(sheetCtx);
+                  _showChangePasswordDialog();
+                },
+                icon: const Icon(Icons.lock_outline, size: 18),
+                label: const Text('修改密码'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFFfeca57),
+                  side: BorderSide(color: const Color(0xFFfeca57).withOpacity(0.4)),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+              const SizedBox(height: 10),
+              OutlinedButton.icon(
+                onPressed: () {
+                  Navigator.pop(sheetCtx);
                   Navigator.push(
                     context,
                     MaterialPageRoute(builder: (_) => const MyMessagesScreen()),
@@ -757,6 +773,100 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       });
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('资料已更新，新留言将使用新昵称')),
+      );
+    } catch (e) {
+      var msg = e.toString();
+      if (msg.startsWith('Exception: ')) msg = msg.substring(11);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    }
+  }
+
+  // 修改密码：成功后服务端吊销所有旧 token，本机用新会话
+  Future<void> _showChangePasswordDialog() async {
+    final oldCtrl = TextEditingController();
+    final newCtrl = TextEditingController();
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          backgroundColor: const Color(0xFF1e1e3a),
+          title: const Text('修改密码', style: TextStyle(color: Colors.white)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('修改成功后，其他设备需要重新登录',
+                  style: TextStyle(
+                      color: Colors.white.withOpacity(0.35), fontSize: 11)),
+              const SizedBox(height: 12),
+              TextField(
+                controller: oldCtrl,
+                obscureText: true,
+                autofocus: true,
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  hintText: '原密码',
+                  hintStyle: const TextStyle(color: Colors.white24),
+                  enabledBorder: UnderlineInputBorder(
+                    borderSide: BorderSide(color: Colors.white24),
+                  ),
+                  focusedBorder: const UnderlineInputBorder(
+                    borderSide: BorderSide(color: Color(0xFFfeca57)),
+                  ),
+                ),
+                onChanged: (_) => setDialogState(() {}),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: newCtrl,
+                obscureText: true,
+                maxLength: 30,
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  hintText: '新密码（至少 6 位）',
+                  hintStyle: const TextStyle(color: Colors.white24),
+                  counterStyle: const TextStyle(
+                      color: Colors.white24, fontSize: 10),
+                  enabledBorder: UnderlineInputBorder(
+                    borderSide: BorderSide(color: Colors.white24),
+                  ),
+                  focusedBorder: const UnderlineInputBorder(
+                    borderSide: BorderSide(color: Color(0xFFfeca57)),
+                  ),
+                ),
+                onChanged: (_) => setDialogState(() {}),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消', style: TextStyle(color: Colors.white54)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFfeca57)),
+              onPressed: oldCtrl.text.isEmpty ||
+                      newCtrl.text.length < 6
+                  ? null
+                  : () => Navigator.pop(ctx, true),
+              child: const Text('确认修改',
+                  style: TextStyle(color: Colors.black87)),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (ok != true || !mounted) return;
+    try {
+      await ApiService.changePassword(
+        oldPassword: oldCtrl.text,
+        newPassword: newCtrl.text,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('密码已修改，其他设备需重新登录')),
       );
     } catch (e) {
       var msg = e.toString();
