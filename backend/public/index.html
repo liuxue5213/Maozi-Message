@@ -825,6 +825,13 @@
             activeBarrages.filter(b => b.id === data.id).forEach(b => { b.anim.cancel(); b.el.remove(); });
             activeBarrages = activeBarrages.filter(b => b.id !== data.id);
             updateTrackIndicators();
+          } else if (type === 'reply_deleted') {
+            // 管理员删回复：同步本地缓存（详情弹窗内需重新打开刷新）
+            const msg = allMessages.find(m => m.id === data.message_id);
+            if (msg && Array.isArray(msg.replies)) {
+              msg.replies = msg.replies.filter(r => r.id !== data.id);
+              msg.replies_count = Math.max((msg.replies_count || 0) - 1, 0);
+            }
           } else if (type === 'vote_update') {
             const target = data.target_type === 'message'
               ? allMessages.find(m => m.id === data.target_id)

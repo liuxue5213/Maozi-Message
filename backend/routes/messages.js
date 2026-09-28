@@ -298,10 +298,20 @@ router.post('/messages', (req, res) => {
       expireAt = d.toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
     }
 
+    // 防刷屏：同一身份 10 分钟内发布过完全相同的内容则拒绝
+    const authorIdentity = tokenPayload ? tokenPayload.uid : generateFingerprint(req);
+    const dupRecent = db.prepare(`
+      SELECT 1 FROM messages WHERE author_id = ? AND content = ?
+        AND created_at > datetime('now', '-10 minutes') AND deleted_at IS NULL
+    `).get(authorIdentity, safeContent);
+    if (dupRecent) {
+      return res.status(429).json({ success: false, error: '刚刚已经发过同样的内容啦，休息一下~' });
+    }
+
     db.prepare(`
       INSERT INTO messages (id, content, author_name, color, bg_color, mood, is_anonymous, expire_at, author_id)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, safeContent, finalName, finalColor, finalBgColor, finalMood, tokenPayload ? 0 : 1, expireAt, tokenPayload ? tokenPayload.uid : generateFingerprint(req));
+    `).run(id, safeContent, finalName, finalColor, finalBgColor, finalMood, tokenPayload ? 0 : 1, expireAt, authorIdentity);
 
     const newMsg = db.prepare(`SELECT id, content, author_name, color, bg_color, mood, is_anonymous,
       replies_count, created_at, expire_at, is_pinned FROM messages WHERE id = ?`).get(id);
@@ -348,6 +358,15 @@ router.post('/messages/:id/reply', (req, res) => {
         ? randomNickname()
         : author_name.trim().slice(0, 20);
       fp = generateFingerprint(req);
+    }
+
+    // 防刷屏：同一身份 10 分钟内回复过完全相同的内容则拒绝
+    const dupReply = db.prepare(`
+      SELECT 1 FROM replies WHERE author_id = ? AND content = ?
+        AND created_at > datetime('now', '-10 minutes') AND deleted_at IS NULL
+    `).get(fp, safeContent);
+    if (dupReply) {
+      return res.status(429).json({ success: false, error: '刚刚已经回复过同样的内容啦，休息一下~' });
     }
 
     const insertReply = db.transaction(() => {

@@ -410,6 +410,33 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           _activeBarrages.removeWhere((b) => b.message.id == id);
           if (_activeBarrages.length != before) _tickFrame.value++;
           break;
+        case 'reply_deleted':
+          // 管理员删回复：同步本地缓存
+          final data = (event['data'] ?? {}) as Map<String, dynamic>;
+          final mid = data['message_id'] as String?;
+          final rid = data['id'] as String?;
+          if (mid == null || rid == null) break;
+          final idx = _allMessages.indexWhere((m) => m.id == mid);
+          if (idx != -1 && _allMessages[idx].replies.any((r) => r.id == rid)) {
+            final old = _allMessages[idx];
+            _allMessages[idx] = Message(
+              id: old.id,
+              content: old.content,
+              authorName: old.authorName,
+              color: old.color,
+              bgColor: old.bgColor,
+              mood: old.mood,
+              isAnonymous: old.isAnonymous,
+              likesCount: old.likesCount,
+              dislikesCount: old.dislikesCount,
+              repliesCount: old.repliesCount > 0 ? old.repliesCount - 1 : 0,
+              createdAt: old.createdAt,
+              myVote: old.myVote,
+              mine: old.mine,
+              replies: old.replies.where((r) => r.id != rid).toList(),
+            );
+          }
+          break;
         default:
           break; // vote_update 等事件由详情页自行拉取
       }
