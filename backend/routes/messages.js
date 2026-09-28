@@ -303,6 +303,15 @@ router.post('/messages/:id/reply', (req, res) => {
         VALUES (?, ?, ?, ?, ?)
       `).run(id, req.params.id, safeContent, finalName, fp);
       db.prepare('UPDATE messages SET replies_count = replies_count + 1 WHERE id = ?').run(req.params.id);
+      // 通知中心：别人回复了注册用户的留言时落一条通知（匿名作者无处投递，跳过；自己回自己不通知）
+      if (msg.author_id && msg.author_id !== fp) {
+        const isRegistered = db.prepare('SELECT 1 FROM users WHERE id = ?').get(msg.author_id);
+        if (isRegistered) {
+          db.prepare(`INSERT INTO notifications (user_id, type, message_id, reply_id, sender_name, preview)
+            VALUES (?, 'reply', ?, ?, ?, ?)`)
+            .run(msg.author_id, req.params.id, id, finalName, safeContent.slice(0, 60));
+        }
+      }
     });
     insertReply();
 

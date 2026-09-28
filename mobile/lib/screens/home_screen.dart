@@ -10,6 +10,7 @@ import '../widgets/barrage_item.dart';
 import 'detail_screen.dart';
 import 'login_screen.dart';
 import 'my_messages_screen.dart';
+import 'notifications_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -55,9 +56,19 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // 星空背景闪烁动画（独立于弹幕 ticker，常驻低频）
   late final AnimationController _starCtrl;
 
-  // 回复提醒
+  // 回复提醒（持久化通知的未读数）
   String _myId = '';
-  bool _hasUnreadNotice = false;
+  int _unreadCount = 0;
+
+  Future<void> _refreshUnreadCount() async {
+    if (!_loggedIn) return;
+    try {
+      final data = await ApiService.getNotifications(limit: 1);
+      if (!mounted) return;
+      final unread = (data['unread'] as num?)?.toInt() ?? 0;
+      setState(() => _unreadCount = unread);
+    } catch (_) {/* 未读数拉取失败不打扰用户 */}
+  }
 
   // 当前浏览的日期（yyyy-MM-dd，设备本地时区，与 Web 端一致）
   String _viewDate = _fmtDate(DateTime.now());
@@ -107,10 +118,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       _avatarColor = (user?['avatar_color'] as String?) ?? '#48dbfb';
       _myId = myId;
     });
+    if (logged) _refreshUnreadCount();
   }
 
   Future<void> _openAccount() async {
-    if (_hasUnreadNotice) setState(() => _hasUnreadNotice = false);
     if (!_loggedIn) {
       final okLogin = await Navigator.push<bool>(
         context,
@@ -175,6 +186,31 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
               const SizedBox(height: 20),
               OutlinedButton.icon(
+                onPressed: () async {
+                  Navigator.pop(sheetCtx);
+                  await Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const NotificationsScreen()),
+                  );
+                  _refreshUnreadCount(); // 通知页可能已全部已读
+                },
+                icon: const Icon(Icons.notifications_none_rounded, size: 18),
+                label: Text(_unreadCount > 0 ? '通知（$_unreadCount 条未读）' : '通知'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: _unreadCount > 0
+                      ? const Color(0xFF48dbfb)
+                      : Colors.white70,
+                  side: BorderSide(
+                      color: _unreadCount > 0
+                          ? const Color(0xFF48dbfb).withOpacity(0.5)
+                          : Colors.white.withOpacity(0.2)),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+              const SizedBox(height: 10),
+              OutlinedButton.icon(
                 onPressed: () {
                   Navigator.pop(sheetCtx);
                   _showEditProfileDialog();
@@ -233,6 +269,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   setState(() {
                     _loggedIn = false;
                     _nickname = '';
+                    _unreadCount = 0;
                   });
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(content: Text('已退出登录')),
@@ -557,7 +594,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   void _showReplyNotice(Map<String, dynamic> reply) {
     if (!mounted) return;
-    setState(() => _hasUnreadNotice = true);
+    setState(() => _unreadCount++);
     final name = (reply['author_name'] ?? '有人').toString();
     final content = (reply['content'] ?? '').toString();
     final preview = content.length > 24 ? '${content.substring(0, 24)}…' : content;
@@ -1022,14 +1059,23 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        if (_hasUnreadNotice)
+                        if (_unreadCount > 0)
                           Container(
-                            width: 8,
-                            height: 8,
+                            constraints: const BoxConstraints(minWidth: 16),
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            height: 16,
+                            alignment: Alignment.center,
                             margin: const EdgeInsets.only(right: 2),
-                            decoration: const BoxDecoration(
-                              color: Color(0xFFFF6B6B),
-                              shape: BoxShape.circle,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFFF6B6B),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              _unreadCount > 99 ? '99+' : '$_unreadCount',
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w700),
                             ),
                           ),
                         Icon(

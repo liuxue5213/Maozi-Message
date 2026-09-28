@@ -72,6 +72,19 @@ db.exec(`
     created_at TEXT DEFAULT (datetime('now'))
   );
 
+  -- 通知中心：别人回复了"注册用户"的留言时落库，离线也能看到
+  CREATE TABLE IF NOT EXISTS notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    type TEXT DEFAULT 'reply',
+    message_id TEXT NOT NULL,
+    reply_id TEXT,
+    sender_name TEXT DEFAULT '',
+    preview TEXT DEFAULT '',
+    read INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
   -- 创建索引加速查询
   CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_messages_expire ON messages(expire_at);
@@ -79,6 +92,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_votes_target ON votes(target_type, target_id);
   CREATE INDEX IF NOT EXISTS idx_votes_user_target ON votes(user_fingerprint, target_type, target_id);
   CREATE INDEX IF NOT EXISTS idx_reports_target ON reports(target_type, target_id);
+  CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, read);
 `);
 
 // 旧库迁移：users.token_version（修改密码后吊销全部旧 token 用）

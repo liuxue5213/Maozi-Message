@@ -8,6 +8,7 @@ const { WebSocketServer } = require('ws');
 const http = require('http');
 const messagesRouter = require('./routes/messages');
 const authRouter = require('./routes/auth');
+const notificationsRouter = require('./routes/notifications');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 60175;
@@ -91,6 +92,7 @@ const authLimiter = rateLimit({
 app.use('/api/auth', authLimiter, authRouter);
 app.use('/api/messages', postLimiter);
 app.use('/api/replies', postLimiter);
+app.use('/api/notifications', apiLimiter, postLimiter, notificationsRouter);
 app.use('/api', apiLimiter, messagesRouter);
 
 // 静态文件服务（Web前端弹幕页）

@@ -162,6 +162,32 @@ class ApiService {
     return _finishAuth(res);
   }
 
+  // ---------- 通知 ----------
+
+  /// 我的通知列表，返回 {items: List, unread: int}
+  static Future<Map<String, dynamic>> getNotifications({int limit = 50}) async {
+    final res = await http
+        .get(Uri.parse('$baseUrl/notifications?limit=$limit'), headers: await _headers())
+        .timeout(_timeout);
+    final data = jsonDecode(res.body);
+    if (data['success'] == true) {
+      return data['data'];
+    }
+    throw Exception(data['error'] ?? '加载失败');
+  }
+
+  /// 全部标记已读
+  static Future<void> markAllNotificationsRead() async {
+    final res = await http
+        .post(Uri.parse('$baseUrl/notifications/read-all'),
+            headers: await _headers(jsonBody: true))
+        .timeout(_timeout);
+    final data = jsonDecode(res.body);
+    if (data['success'] != true) {
+      throw Exception(data['error'] ?? '操作失败');
+    }
+  }
+
   // ---------- 留言 ----------
 
   /// 当前身份标识：登录用户取 uid，匿名取设备指纹（与后端 author_id 规则一致）

@@ -88,6 +88,39 @@
     }
     #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
     #user-info { position: relative; }
+    #notif-btn {
+      position: relative; display: none; align-items: center; justify-content: center;
+      width: 40px; height: 40px; border-radius: 50%;
+      background: rgba(255,255,255,0.08); cursor: pointer;
+      font-size: 17px; flex-shrink: 0; transition: background 0.2s;
+    }
+    #notif-btn:hover { background: rgba(255,255,255,0.15); }
+    #notif-btn.show { display: flex; }
+    #notif-badge {
+      display: none; position: absolute; top: -3px; right: -3px;
+      min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px;
+      background: #ff6b6b; color: #fff; font-size: 10px; font-weight: 600;
+      line-height: 17px; text-align: center; box-sizing: border-box;
+      border: 2px solid #0a0a1a;
+    }
+    #notif-badge.show { display: block; }
+    .notif-list { max-height: 46vh; overflow-y: auto; }
+    .notif-item {
+      padding: 10px 12px; border-radius: 10px; margin-bottom: 8px;
+      background: rgba(255,255,255,0.04); cursor: pointer;
+    }
+    .notif-item:hover { background: rgba(255,255,255,0.09); }
+    .notif-item.unread { background: rgba(72,219,251,0.10); border-left: 3px solid #48dbfb; }
+    .notif-item .n-meta { font-size: 11px; opacity: 0.55; margin-bottom: 3px; }
+    .notif-item .n-body { font-size: 13px; line-height: 1.45; }
+    .notif-empty { text-align: center; color: rgba(255,255,255,0.35); font-size: 13px; padding: 26px 0; }
+    .notif-readall {
+      width: 100%; padding: 8px; margin-top: 4px;
+      border-radius: 10px; border: 1px solid rgba(72,219,251,0.4);
+      background: rgba(72,219,251,0.12); color: #48dbfb;
+      font-size: 13px; cursor: pointer;
+    }
+    .notif-readall:hover { background: rgba(72,219,251,0.22); }
     #detail-modal {
       position: fixed; inset: 0; z-index: 100;
       background: rgba(0,0,0,0.7); backdrop-filter: blur(4px);
@@ -170,6 +203,12 @@
       display: none; align-items: center; justify-content: center;
     }
     #profile-modal.active { display: flex; }
+    #notif-modal {
+      position: fixed; inset: 0; z-index: 200;
+      background: rgba(0,0,0,0.7); backdrop-filter: blur(4px);
+      display: none; align-items: center; justify-content: center;
+    }
+    #notif-modal.active { display: flex; }
     #profile-nickname:focus { border-color: #48dbfb; }
     .auth-tabs { display: flex; gap: 8px; margin-bottom: 16px; }
     .auth-tab {
@@ -320,7 +359,20 @@
     </div>
   </div>
 
+  <!-- 通知中心弹窗 -->
+  <div id="notif-modal">
+    <div class="modal-content" style="max-width:380px;">
+      <div class="modal-header">
+        <h3>通知</h3>
+        <button class="modal-close" onclick="closeNotif()">&times;</button>
+      </div>
+      <div id="notif-list" class="notif-list"><div class="notif-empty">加载中...</div></div>
+      <button class="notif-readall" onclick="markAllRead()">全部标记已读</button>
+    </div>
+  </div>
+
   <div id="control-bar">
+    <div id="notif-btn" onclick="openNotif()">🔔<span id="notif-badge"></span></div>
     <div id="user-info" onclick="onUserChipClick()">
       <span id="red-dot"></span>
       <span id="user-avatar">?</span>
@@ -468,15 +520,76 @@
     function updateUserUI() {
       const avatar = document.getElementById('user-avatar');
       const name = document.getElementById('user-name');
+      const notifBtn = document.getElementById('notif-btn');
       if (currentUser) {
         avatar.textContent = currentUser.nickname.charAt(0);
         avatar.style.background = currentUser.avatar_color;
         name.textContent = currentUser.nickname;
+        notifBtn.classList.add('show');
+        loadNotifCount();
       } else {
         avatar.textContent = '?';
         avatar.style.background = '#555';
         name.textContent = '点击登录';
+        notifBtn.classList.remove('show');
+        document.getElementById('notif-badge').classList.remove('show');
       }
+    }
+
+    // === 通知中心 ===
+    function setNotifBadge(unread) {
+      const badge = document.getElementById('notif-badge');
+      if (unread > 0) {
+        badge.textContent = unread > 99 ? '99+' : unread;
+        badge.classList.add('show');
+      } else {
+        badge.classList.remove('show');
+      }
+    }
+    async function loadNotifCount() {
+      if (!currentUser) return;
+      try {
+        const res = await fetch(`${API_BASE}/api/notifications?limit=1`, { headers: getAuthHeaders() });
+        const data = await res.json();
+        if (data.success) setNotifBadge(data.data.unread);
+      } catch (_) {}
+    }
+    async function openNotif() {
+      document.getElementById('notif-modal').classList.add('active');
+      const listEl = document.getElementById('notif-list');
+      listEl.innerHTML = '<div class="notif-empty">加载中...</div>';
+      try {
+        const res = await fetch(`${API_BASE}/api/notifications?limit=50`, { headers: getAuthHeaders() });
+        const data = await res.json();
+        if (!data.success) { listEl.innerHTML = `<div class="notif-empty">${escapeHtml(data.error || '加载失败')}</div>`; return; }
+        setNotifBadge(data.data.unread);
+        if (data.data.items.length === 0) {
+          listEl.innerHTML = '<div class="notif-empty">🔔 还没有通知<br>别人回复你的留言时会在这里提醒</div>';
+          return;
+        }
+        listEl.innerHTML = data.data.items.map(n => `
+          <div class="notif-item ${n.read ? '' : 'unread'}" onclick="openNotifTarget('${n.message_id}')">
+            <div class="n-meta">💬 ${escapeHtml(n.sender_name || '有人')} 回复了你的留言 · ${formatTime(n.created_at)}</div>
+            <div class="n-body">${escapeHtml(n.preview || '')}</div>
+          </div>`).join('');
+      } catch (_) { listEl.innerHTML = '<div class="notif-empty">网络错误，请重试</div>'; }
+    }
+    function closeNotif() { document.getElementById('notif-modal').classList.remove('active'); }
+    function openNotifTarget(messageId) {
+      closeNotif();
+      openDetail(messageId);
+    }
+    async function markAllRead() {
+      try {
+        const res = await fetch(`${API_BASE}/api/notifications/read-all`, {
+          method: 'POST', headers: getAuthHeaders(),
+        });
+        const data = await res.json();
+        if (data.success) {
+          setNotifBadge(0);
+          document.querySelectorAll('.notif-item.unread').forEach(el => el.classList.remove('unread'));
+        }
+      } catch (_) {}
     }
     async function checkAuth() {
       if (!authToken) { updateUserUI(); return; }
@@ -618,6 +731,7 @@
               const preview = String(data.reply.content).slice(0, 24);
               showNotice(`💬 ${data.reply.author_name} 回复了你的留言：${preview}${data.reply.content.length > 24 ? '…' : ''}`);
               document.getElementById('red-dot').classList.add('show');
+              if (currentUser) loadNotifCount(); // 同步未读角标
             }
           } else if (type === 'message_deleted') {
             allMessages = allMessages.filter(m => m.id !== data.id);
@@ -987,6 +1101,7 @@
     document.getElementById('message-input').addEventListener('keypress', e => { if (e.key==='Enter') sendMessage(); });
     document.getElementById('detail-modal').addEventListener('click', e => { if (e.target===document.getElementById('detail-modal')) closeDetail(); });
     document.getElementById('profile-modal').addEventListener('click', e => { if (e.target===document.getElementById('profile-modal')) closeProfile(); });
+    document.getElementById('notif-modal').addEventListener('click', e => { if (e.target===document.getElementById('notif-modal')) closeNotif(); });
     document.getElementById('profile-nickname').addEventListener('input', renderProfileAvatar);
     window.addEventListener('resize', () => { activeBarrages.forEach(b=>b.anim.cancel()); activeBarrages.forEach(b=>b.el.remove()); activeBarrages=[]; });
 
