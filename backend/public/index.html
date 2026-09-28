@@ -164,6 +164,13 @@
       display: none; align-items: center; justify-content: center;
     }
     #auth-modal.active { display: flex; }
+    #profile-modal {
+      position: fixed; inset: 0; z-index: 200;
+      background: rgba(0,0,0,0.7); backdrop-filter: blur(4px);
+      display: none; align-items: center; justify-content: center;
+    }
+    #profile-modal.active { display: flex; }
+    #profile-nickname:focus { border-color: #48dbfb; }
     .auth-tabs { display: flex; gap: 8px; margin-bottom: 16px; }
     .auth-tab {
       flex: 1; padding: 8px; border: none; border-radius: 8px;
@@ -185,6 +192,26 @@
       font-weight: 600; cursor: pointer;
     }
     .auth-submit:active { transform: scale(0.97); }
+    .color-palette { display: flex; flex-wrap: wrap; gap: 10px; margin: 4px 0 12px; }
+    .color-swatch {
+      width: 30px; height: 30px; border-radius: 50%; cursor: pointer;
+      border: 2px solid transparent; transition: transform 0.15s, border-color 0.15s;
+    }
+    .color-swatch:hover { transform: scale(1.12); }
+    .color-swatch.active { border-color: #fff; transform: scale(1.12); }
+    .profile-avatar-preview {
+      width: 44px; height: 44px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 19px; font-weight: 600; color: #fff; flex-shrink: 0;
+    }
+    .profile-hint { color: rgba(255,255,255,0.45); font-size: 12px; line-height: 1.5; }
+    .profile-logout {
+      width: 100%; padding: 9px; margin-top: 10px;
+      border-radius: 10px; cursor: pointer; font-size: 14px;
+      background: rgba(255,107,107,0.1); border: 1px solid rgba(255,107,107,0.4);
+      color: #ff6b6b;
+    }
+    .profile-logout:hover { background: rgba(255,107,107,0.2); }
     #user-info {
       display: flex; align-items: center; gap: 8px;
       padding: 6px 12px; border-radius: 20px;
@@ -252,6 +279,26 @@
     </div>
   </div>
 
+  <!-- 我的资料弹窗（已登录） -->
+  <div id="profile-modal">
+    <div class="modal-content" style="max-width:360px;">
+      <div class="modal-header">
+        <h3>我的资料</h3>
+        <button class="modal-close" onclick="closeProfile()">&times;</button>
+      </div>
+      <div style="display:flex; align-items:center; gap:12px; margin-bottom:14px;">
+        <div id="profile-avatar" class="profile-avatar-preview">?</div>
+        <div class="profile-hint">昵称与头像色将用于之后发布的留言；<br>历史留言显示发布时的名字。</div>
+      </div>
+      <input type="text" id="profile-nickname" placeholder="昵称" maxlength="20"
+        style="width:100%; padding:10px 14px; margin-bottom:12px; border-radius:10px; border:1px solid rgba(255,255,255,0.15); background:rgba(255,255,255,0.06); color:#fff; font-size:14px; outline:none; box-sizing:border-box;" />
+      <div id="profile-colors" class="color-palette"></div>
+      <div id="profile-error" class="auth-error"></div>
+      <button class="auth-submit" onclick="saveProfile()">保存</button>
+      <button class="profile-logout" onclick="logout(); closeProfile(); updateUserUI();">退出登录</button>
+    </div>
+  </div>
+
   <div id="control-bar">
     <div id="user-info" onclick="onUserChipClick()">
       <span id="red-dot"></span>
@@ -294,9 +341,63 @@
 
     // === 认证相关 ===
     function showAuth() {
-      if (currentUser) { logout(); return; }
+      if (currentUser) { openProfile(); return; }
       document.getElementById('auth-modal').classList.add('active');
       document.getElementById('auth-error').textContent = '';
+    }
+
+    // === 资料编辑 ===
+    const AVATAR_PALETTE = ['#ff6b6b','#feca57','#48dbfb','#ff9ff3','#54a0ff','#5f27cd','#00d2d3','#ff9f43','#10ac84','#ee5a24','#c8d6e5','#1e90ff'];
+    let profileColor = '#48dbfb';
+    function openProfile() {
+      if (!currentUser) return;
+      profileColor = currentUser.avatar_color || '#48dbfb';
+      document.getElementById('profile-nickname').value = currentUser.nickname || '';
+      document.getElementById('profile-error').textContent = '';
+      const wrap = document.getElementById('profile-colors');
+      wrap.innerHTML = '';
+      AVATAR_PALETTE.forEach(c => {
+        const sw = document.createElement('div');
+        sw.className = 'color-swatch' + (c === profileColor ? ' active' : '');
+        sw.style.background = c;
+        sw.onclick = () => { profileColor = c; renderProfileAvatar(); };
+        sw.dataset.color = c;
+        wrap.appendChild(sw);
+      });
+      renderProfileAvatar();
+      document.getElementById('profile-modal').classList.add('active');
+    }
+    function renderProfileAvatar() {
+      const name = (document.getElementById('profile-nickname').value.trim() || currentUser.nickname || '?');
+      const avatar = document.getElementById('profile-avatar');
+      avatar.textContent = name.charAt(0);
+      avatar.style.background = profileColor;
+      document.querySelectorAll('#profile-colors .color-swatch').forEach(sw =>
+        sw.classList.toggle('active', sw.dataset.color === profileColor));
+    }
+    function closeProfile() { document.getElementById('profile-modal').classList.remove('active'); }
+    async function saveProfile() {
+      const nickname = document.getElementById('profile-nickname').value.trim();
+      const errEl = document.getElementById('profile-error');
+      errEl.textContent = '';
+      if (!nickname) { errEl.textContent = '昵称不能为空'; return; }
+      try {
+        const res = await fetch(`${API_BASE}/api/auth/profile`, {
+          method: 'PATCH', headers: getAuthHeaders(),
+          body: JSON.stringify({ nickname, avatar_color: profileColor }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          authToken = data.data.token;
+          currentUser = data.data.user;
+          localStorage.setItem('mz_token', authToken);
+          updateUserUI();
+          closeProfile();
+          showNotice('资料已更新，新留言将使用新昵称');
+        } else {
+          errEl.textContent = data.error || '保存失败';
+        }
+      } catch (e) { errEl.textContent = '网络错误，请重试'; }
     }
     function closeAuth() { document.getElementById('auth-modal').classList.remove('active'); }
     function switchAuthTab(mode, e) {
@@ -830,6 +931,8 @@
 
     document.getElementById('message-input').addEventListener('keypress', e => { if (e.key==='Enter') sendMessage(); });
     document.getElementById('detail-modal').addEventListener('click', e => { if (e.target===document.getElementById('detail-modal')) closeDetail(); });
+    document.getElementById('profile-modal').addEventListener('click', e => { if (e.target===document.getElementById('profile-modal')) closeProfile(); });
+    document.getElementById('profile-nickname').addEventListener('input', renderProfileAvatar);
     window.addEventListener('resize', () => { activeBarrages.forEach(b=>b.anim.cancel()); activeBarrages.forEach(b=>b.el.remove()); activeBarrages=[]; });
 
     (async function init() {

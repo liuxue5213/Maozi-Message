@@ -59,6 +59,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   String _myId = '';
   bool _hasUnreadNotice = false;
 
+  // 当前浏览的日期（yyyy-MM-dd，设备本地时区，与 Web 端一致）
+  String _viewDate = _fmtDate(DateTime.now());
+  bool get _isToday => _viewDate == _fmtDate(DateTime.now());
+  static String _fmtDate(DateTime d) =>
+      '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
   // WebSocket 实时推送
   WebSocketChannel? _ws;
   Timer? _wsRetry;
@@ -171,6 +177,22 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               OutlinedButton.icon(
                 onPressed: () {
                   Navigator.pop(sheetCtx);
+                  _showEditProfileDialog();
+                },
+                icon: const Icon(Icons.tune_rounded, size: 18),
+                label: const Text('编辑资料'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.white70,
+                  side: BorderSide(color: Colors.white.withOpacity(0.2)),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+              const SizedBox(height: 10),
+              OutlinedButton.icon(
+                onPressed: () {
+                  Navigator.pop(sheetCtx);
                   Navigator.push(
                     context,
                     MaterialPageRoute(builder: (_) => const MyMessagesScreen()),
@@ -279,7 +301,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       final event = jsonDecode(raw) as Map<String, dynamic>;
       switch (event['type']) {
         case 'new_message':
-          final msg = Message.fromJson((event['data'] ?? {}) as Map<String, dynamic>);
+            // 浏览历史日期时，新留言不属于当前视图，不插入
+            if (!_isToday) break;
+            final msg = Message.fromJson((event['data'] ?? {}) as Map<String, dynamic>);
           if (msg.id.isEmpty || _displayedIds.contains(msg.id)) break;
           // 若本地已有同 ID（刚发布的临时数据被服务器刷新补齐），跳过
           if (_allMessages.any((m) => m.id == msg.id)) break;
@@ -358,7 +382,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   Future<void> _loadData() async {
     try {
-      final messages = await ApiService.getMessages();
+      final messages = await ApiService.getMessages(date: _viewDate);
       final stats = await ApiService.getStats();
       if (mounted) {
         setState(() {
@@ -368,7 +392,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           _loading = false;
           _error = null;
         });
-        _ensureMinMessages();
+        // 默认填充的示例弹幕只在今天生效，历史日期保持真实
+        if (_isToday) _ensureMinMessages();
         _initDisplayQueue();
       }
     } catch (e) {
@@ -379,6 +404,18 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         });
       }
     }
+  }
+
+  // 前后翻看日期；不能翻到未来
+  Future<void> _shiftDate(int n) async {
+    final next = _fmtDate(DateTime.parse(_viewDate).add(Duration(days: n)));
+    if (next.compareTo(_fmtDate(DateTime.now())) > 0) return;
+    setState(() => _viewDate = next);
+    _displayQueue.clear();
+    _activeBarrages.clear();
+    _displayedIds.clear();
+    _tickFrame.value++;
+    await _loadData();
   }
 
   void _ensureMinMessages() {
@@ -587,17 +624,24 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     mood: selectedMood,
                     isAnonymous: !_loggedIn,
                   );
-                  // 本地立刻上屏（不等轮询）；屏满则插队头等下一个空位
-                  if (_activeBarrages.length < _maxOnScreen) {
-                    if (!_stopwatch.isRunning) _stopwatch.start();
-                    _launchOneNow(direct: created);
+                  if (_isToday) {
+                    // 本地立刻上屏（不等轮询）；屏满则插队头等下一个空位
+                    if (_activeBarrages.length < _maxOnScreen) {
+                      if (!_stopwatch.isRunning) _stopwatch.start();
+                      _launchOneNow(direct: created);
+                    } else {
+                      _displayQueue.insert(0, created);
+                    }
+                    if (mounted) Navigator.pop(ctx);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('发布成功！')),
+                    );
                   } else {
-                    _displayQueue.insert(0, created);
+                    if (mounted) Navigator.pop(ctx);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('发布成功！切回「今天」即可看到这条弹幕')),
+                    );
                   }
-                  if (mounted) Navigator.pop(ctx);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('发布成功！')),
-                  );
                   _loadData();
                 } catch (e) {
                   ScaffoldMessenger.of(context).showSnackBar(
@@ -611,6 +655,114 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         ),
       ),
     );
+  }
+
+  // 编辑资料：改昵称和头像色（影响之后发布的留言）
+  static const List<String> _avatarPalette = [
+    '#ff6b6b', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff', '#5f27cd',
+    '#00d2d3', '#ff9f43', '#10ac84', '#ee5a24', '#c8d6e5', '#1e90ff',
+  ];
+
+  Future<void> _showEditProfileDialog() async {
+    final controller = TextEditingController(text: _nickname);
+    String selectedColor = _avatarColor;
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          backgroundColor: const Color(0xFF1e1e3a),
+          title: const Text('编辑资料', style: TextStyle(color: Colors.white)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('新昵称与头像色将用于之后发布的留言',
+                  style: TextStyle(
+                      color: Colors.white.withOpacity(0.35), fontSize: 11)),
+              const SizedBox(height: 12),
+              TextField(
+                controller: controller,
+                maxLength: 20,
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  hintText: '昵称',
+                  hintStyle: const TextStyle(color: Colors.white24),
+                  counterStyle: const TextStyle(
+                      color: Colors.white24, fontSize: 10),
+                  enabledBorder: UnderlineInputBorder(
+                    borderSide: BorderSide(color: Colors.white24),
+                  ),
+                  focusedBorder: const UnderlineInputBorder(
+                    borderSide: BorderSide(color: Color(0xFF48dbfb)),
+                  ),
+                ),
+                onChanged: (_) => setDialogState(() {}),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: _avatarPalette.map((hex) {
+                  final color =
+                      Color(int.parse(hex.replaceFirst('#', '0xFF')));
+                  final selected = hex == selectedColor;
+                  return GestureDetector(
+                    onTap: () => setDialogState(() => selectedColor = hex),
+                    child: Container(
+                      width: 30,
+                      height: 30,
+                      decoration: BoxDecoration(
+                        color: color,
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: selected ? Colors.white : Colors.transparent,
+                          width: 2,
+                        ),
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消', style: TextStyle(color: Colors.white54)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF48dbfb)),
+              onPressed: controller.text.trim().isEmpty
+                  ? null
+                  : () => Navigator.pop(ctx, true),
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (ok != true || !mounted) return;
+    try {
+      final user = await ApiService.updateProfile(
+        nickname: controller.text.trim(),
+        avatarColor: selectedColor,
+      );
+      if (!mounted) return;
+      setState(() {
+        _nickname = (user['nickname'] as String?) ?? _nickname;
+        _avatarColor = (user['avatar_color'] as String?) ?? _avatarColor;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('资料已更新，新留言将使用新昵称')),
+      );
+    } catch (e) {
+      var msg = e.toString();
+      if (msg.startsWith('Exception: ')) msg = msg.substring(11);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    }
   }
 
   Widget _moodChip(String mood, String emoji, String selected, Function(String) onTap) {
@@ -686,6 +838,53 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   child: Text(
                     '📊 今日: $_todayCount 条 | 总计: $_totalCount 条',
                     style: const TextStyle(color: Colors.white60, fontSize: 12),
+                  ),
+                ),
+              ),
+
+              // 日期导航（前后翻看历史）
+              Positioned(
+                top: 48,
+                left: 16,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      GestureDetector(
+                        onTap: () => _shiftDate(-1),
+                        child: const Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                          child: Text('‹',
+                              style: TextStyle(
+                                  color: Color(0xFF48dbfb), fontSize: 16)),
+                        ),
+                      ),
+                      Text(
+                        _isToday
+                            ? '今天 · ${_todayCount}条'
+                            : '${_viewDate.substring(5).replaceFirst('-', '/')} · ${_allMessages.length}条',
+                        style: const TextStyle(
+                            color: Colors.white70, fontSize: 12),
+                      ),
+                      GestureDetector(
+                        onTap: _isToday ? null : () => _shiftDate(1),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 4),
+                          child: Text('›',
+                              style: TextStyle(
+                                  color: _isToday
+                                      ? Colors.white24
+                                      : const Color(0xFF48dbfb),
+                                  fontSize: 16)),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -774,6 +973,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         );
                       },
                     ),
+                  ),
+                ),
+
+              // 空日期提示（无弹幕可飞时）
+              if (!_loading && _error == null && _allMessages.isEmpty)
+                Center(
+                  child: Text(
+                    _isToday ? '还没有留言，快来抢沙发！' : '这一天还没有留言',
+                    style: const TextStyle(color: Colors.white24, fontSize: 14),
                   ),
                 ),
 

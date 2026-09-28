@@ -1,7 +1,28 @@
 const express = require('express');
 const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
-const { db, hashPassword, verifyPassword, generateToken, verifyToken, randomColor } = require('../db');
+const { db, hashPassword, verifyPassword, generateToken, verifyToken, randomColor, serverFingerprint } = require('../db');
+
+// 登录时把该设备此前的匿名投票并入登录账号。
+// 同一内容登录账号已投过的：丢弃匿名票；其余匿名票归账。
+// 按两个维度找匿名票：客户端指纹（历史投票）+ 服务端 ip+ua 哈希（本轮起匿名投票的新身份）。
+function mergeAnonVotesToUser(uid, fingerprints) {
+  const uniq = [...new Set(fingerprints.filter(fp => fp && typeof fp === 'string' && fp !== uid))];
+  if (uniq.length === 0) return;
+  const run = db.transaction(() => {
+    for (const fp of uniq) {
+      db.prepare(`
+        DELETE FROM votes WHERE user_fingerprint = ?
+          AND EXISTS (SELECT 1 FROM votes v2
+            WHERE v2.user_fingerprint = ?
+              AND v2.target_type = votes.target_type
+              AND v2.target_id = votes.target_id)
+      `).run(fp, uid);
+      db.prepare('UPDATE votes SET user_fingerprint = ? WHERE user_fingerprint = ?').run(uid, fp);
+    }
+  });
+  run();
+}
 
 // 注册
 router.post('/register', (req, res) => {
@@ -63,6 +84,12 @@ router.post('/login', (req, res) => {
       return res.status(401).json({ success: false, error: '用户名或密码错误' });
     }
 
+    // 此设备匿名期的投票并入该账号
+    const clientFp = typeof req.headers['x-fingerprint'] === 'string'
+      ? req.headers['x-fingerprint'].substring(0, 64)
+      : null;
+    mergeAnonVotesToUser(user.id, [clientFp, serverFingerprint(req)]);
+
     const token = generateToken(user.id, user.username, user.nickname);
 
     res.json({
@@ -75,6 +102,43 @@ router.post('/login', (req, res) => {
   } catch (err) {
     console.error('登录失败:', err);
     res.status(500).json({ success: false, error: '登录失败' });
+  }
+});
+
+// 更新资料（昵称/头像颜色）。签发新 token（内含昵称）并返回，客户端整体替换会话。
+router.patch('/profile', (req, res) => {
+  try {
+    const auth = req.headers.authorization;
+    const payload = auth && auth.startsWith('Bearer ') ? verifyToken(auth.substring(7)) : null;
+    if (!payload) {
+      return res.status(401).json({ success: false, error: '未登录' });
+    }
+
+    const { nickname, avatar_color } = req.body;
+    if (typeof nickname !== 'string' || !nickname.trim() || nickname.trim().length > 20) {
+      return res.status(400).json({ success: false, error: '昵称应为 1 到 20 个字符' });
+    }
+    if (typeof avatar_color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(avatar_color)) {
+      return res.status(400).json({ success: false, error: '头像颜色格式无效' });
+    }
+
+    const result = db.prepare('UPDATE users SET nickname = ?, avatar_color = ? WHERE id = ?')
+      .run(nickname.trim(), avatar_color, payload.uid);
+    if (result.changes === 0) {
+      return res.status(401).json({ success: false, error: '用户不存在' });
+    }
+
+    const token = generateToken(payload.uid, payload.usr, nickname.trim());
+    res.json({
+      success: true,
+      data: {
+        token,
+        user: { id: payload.uid, username: payload.usr, nickname: nickname.trim(), avatar_color },
+      },
+    });
+  } catch (err) {
+    console.error('更新资料失败:', err);
+    res.status(500).json({ success: false, error: '更新失败' });
   }
 });
 

@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
-const { db, generateFingerprint, randomColor, randomNickname, verifyToken, tintBg } = require('../db');
+const { db, generateFingerprint, serverFingerprint, randomColor, randomNickname, verifyToken, tintBg } = require('../db');
 const { maskBannedWords } = require('../moderation');
 
 // 获取 WebSocket 广播函数
@@ -330,7 +330,8 @@ router.post('/messages/:id/vote', (req, res) => {
     }
 
     const tokenPayload = getAuthPayload(req);
-    const fp = tokenPayload ? tokenPayload.uid : generateFingerprint(req);
+    // 投票身份：登录用 uid；匿名用服务端 ip+ua 哈希（客户端指纹可伪造，不采用）
+    const fp = tokenPayload ? tokenPayload.uid : serverFingerprint(req);
     const targetId = req.params.id;
 
     const msgExists = db.prepare('SELECT id FROM messages WHERE id = ? AND deleted_at IS NULL').get(targetId);
@@ -376,7 +377,8 @@ router.post('/replies/:id/vote', (req, res) => {
     }
 
     const tokenPayload = getAuthPayload(req);
-    const fp = tokenPayload ? tokenPayload.uid : generateFingerprint(req);
+    // 同上：匿名投票身份用服务端 ip+ua 哈希
+    const fp = tokenPayload ? tokenPayload.uid : serverFingerprint(req);
     const targetId = req.params.id;
 
     const replyExists = db.prepare('SELECT id FROM replies WHERE id = ? AND deleted_at IS NULL').get(targetId);
@@ -460,6 +462,9 @@ router.delete('/messages/:id', (req, res) => {
 
     db.prepare("UPDATE messages SET deleted_at = datetime('now') WHERE id = ?").run(req.params.id);
     db.prepare("UPDATE replies SET deleted_at = datetime('now') WHERE message_id = ?").run(req.params.id);
+    // 清理相关投票记录（留言本身 + 其回复），避免无效数据残留
+    db.prepare("DELETE FROM votes WHERE target_type='message' AND target_id=?").run(req.params.id);
+    db.prepare("DELETE FROM votes WHERE target_type='reply' AND target_id IN (SELECT id FROM replies WHERE message_id=?)").run(req.params.id);
 
     getBroadcast(req)('message_deleted', { id: req.params.id });
 

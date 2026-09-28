@@ -132,6 +132,21 @@ class ApiService {
     throw Exception(data['error'] ?? '认证失败');
   }
 
+  /// 更新资料（昵称/头像颜色）。服务端签发新 token，会话整体替换。
+  static Future<Map<String, dynamic>> updateProfile({
+    required String nickname,
+    required String avatarColor,
+  }) async {
+    final res = await http
+        .patch(
+          Uri.parse('$baseUrl/auth/profile'),
+          headers: await _headers(jsonBody: true),
+          body: jsonEncode({'nickname': nickname, 'avatar_color': avatarColor}),
+        )
+        .timeout(_timeout);
+    return _finishAuth(res);
+  }
+
   // ---------- 留言 ----------
 
   /// 当前身份标识：登录用户取 uid，匿名取设备指纹（与后端 author_id 规则一致）

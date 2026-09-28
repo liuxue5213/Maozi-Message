@@ -106,6 +106,16 @@ function generateFingerprint(req) {
   return Math.abs(hash).toString(36);
 }
 
+// 服务端自证身份：不信任客户端指纹头（可随意伪造）。
+// 用于投票等防刷场景——匿名身份绑定 ip+ua，刷票必须换 IP 才有效。
+// 代价：同一 NAT（公司/校园网）下的匿名用户共享投票身份，登录用户不受影响。
+function serverFingerprint(req) {
+  const fwd = req.headers['x-forwarded-for'];
+  const ip = (typeof fwd === 'string' ? fwd.split(',')[0].trim() : req.socket.remoteAddress) || '';
+  const ua = req.headers['user-agent'] || '';
+  return crypto.createHash('sha256').update(`${ip}|${ua}`).digest('hex').slice(0, 32);
+}
+
 // 生成随机弹幕颜色
 function randomColor() {
   const colors = [
@@ -180,6 +190,7 @@ function tintBg(hex, alpha) {
 module.exports = {
   db,
   generateFingerprint,
+  serverFingerprint,
   randomColor,
   randomNickname,
   sanitize,
