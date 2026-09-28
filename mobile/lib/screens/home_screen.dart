@@ -912,6 +912,132 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     }
   }
 
+  // 全库搜索留言
+  Future<void> _showSearchDialog() async {
+    final controller = TextEditingController();
+    List<Message>? results;
+    bool searching = false;
+    String? searchError;
+    int total = 0;
+
+    Future<void> doSearch(void Function(void Function()) setDialogState) async {
+      final q = controller.text.trim();
+      if (q.isEmpty) return;
+      setDialogState(() { searching = true; searchError = null; });
+      try {
+        final list = await ApiService.searchMessages(q);
+        total = list.length;
+        setDialogState(() { results = list; searching = false; });
+      } catch (e) {
+        setDialogState(() { searching = false; searchError = e.toString(); });
+      }
+    }
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          backgroundColor: const Color(0xFF1e1e3a),
+          title: const Text('搜索留言', style: TextStyle(color: Colors.white)),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: controller,
+                        autofocus: true,
+                        maxLength: 50,
+                        style: const TextStyle(color: Colors.white),
+                        decoration: const InputDecoration(
+                          hintText: '输入关键词...',
+                          hintStyle: TextStyle(color: Colors.white24),
+                          counterStyle: TextStyle(color: Colors.white24, fontSize: 10),
+                          enabledBorder: UnderlineInputBorder(
+                            borderSide: BorderSide(color: Colors.white24),
+                          ),
+                          focusedBorder: UnderlineInputBorder(
+                            borderSide: BorderSide(color: Color(0xFF48dbfb)),
+                          ),
+                        ),
+                        onSubmitted: (_) => doSearch(setDialogState),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => doSearch(setDialogState),
+                      icon: const Icon(Icons.search, color: Color(0xFF48dbfb)),
+                    ),
+                  ],
+                ),
+                Flexible(
+                  child: searching
+                      ? const Padding(
+                          padding: EdgeInsets.all(24),
+                          child: CircularProgressIndicator(color: Color(0xFF48dbfb)),
+                        )
+                      : searchError != null
+                          ? Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Text(searchError!,
+                                  style: const TextStyle(color: Colors.white38, fontSize: 12)),
+                            )
+                          : results == null
+                              ? const Padding(
+                                  padding: EdgeInsets.all(16),
+                                  child: Text('输入关键词，找找大家说过什么',
+                                      style: TextStyle(color: Colors.white24, fontSize: 12)),
+                                )
+                              : results!.isEmpty
+                                  ? const Padding(
+                                      padding: EdgeInsets.all(16),
+                                      child: Text('没有找到相关留言',
+                                          style: TextStyle(color: Colors.white24, fontSize: 12)),
+                                    )
+                                  : ListView.builder(
+                                      shrinkWrap: true,
+                                      itemCount: results!.length,
+                                      itemBuilder: (context, i) {
+                                        final m = results![i];
+                                        return ListTile(
+                                          dense: true,
+                                          contentPadding: EdgeInsets.zero,
+                                          title: Text(
+                                            m.content,
+                                            maxLines: 2,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                                color: Colors.white, fontSize: 14),
+                                          ),
+                                          subtitle: Text(
+                                            '${m.authorName} · 💬${m.repliesCount} 👍${m.likesCount}',
+                                            style: const TextStyle(
+                                                color: Colors.white38, fontSize: 11),
+                                          ),
+                                          onTap: () {
+                                            Navigator.pop(ctx);
+                                            _openDetail(m);
+                                          },
+                                        );
+                                      },
+                                    ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('关闭', style: TextStyle(color: Colors.white54)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _moodChip(String mood, String emoji, String selected, Function(String) onTap) {
     final isSelected = selected == mood;
     return GestureDetector(
@@ -1032,6 +1158,25 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         ),
                       ),
                     ],
+                  ),
+                ),
+              ),
+
+              // 搜索入口（右上角，账号下方）
+              Positioned(
+                top: 48,
+                right: 16,
+                child: GestureDetector(
+                  onTap: _showSearchDialog,
+                  child: Container(
+                    width: 38,
+                    height: 38,
+                    decoration: BoxDecoration(
+                      color: Colors.black54,
+                      borderRadius: BorderRadius.circular(19),
+                    ),
+                    child: const Icon(Icons.search,
+                        color: Colors.white70, size: 20),
                   ),
                 ),
               ),

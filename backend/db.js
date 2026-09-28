@@ -59,6 +59,7 @@ db.exec(`
     nickname TEXT NOT NULL,
     avatar_color TEXT DEFAULT '#48dbfb',
     token_version INTEGER DEFAULT 0,
+    is_admin INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now'))
   );
 
@@ -100,6 +101,11 @@ const userCols = db.pragma('table_info(users)');
 if (!userCols.some(c => c.name === 'token_version')) {
   db.exec("ALTER TABLE users ADD COLUMN token_version INTEGER DEFAULT 0");
   console.log('🛠 users 表已迁移：新增 token_version 列');
+}
+// 旧库迁移：users.is_admin（管理端：举报处理/置顶/强删）
+if (!userCols.some(c => c.name === 'is_admin')) {
+  db.exec("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0");
+  console.log('🛠 users 表已迁移：新增 is_admin 列');
 }
 
 // 输入过滤：防 XSS

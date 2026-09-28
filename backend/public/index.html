@@ -96,6 +96,55 @@
     }
     #notif-btn:hover { background: rgba(255,255,255,0.15); }
     #notif-btn.show { display: flex; }
+    #search-btn {
+      display: flex; align-items: center; justify-content: center;
+      width: 40px; height: 40px; border-radius: 50%;
+      background: rgba(255,255,255,0.08); cursor: pointer;
+      font-size: 16px; flex-shrink: 0; transition: background 0.2s;
+    }
+    #search-btn:hover { background: rgba(255,255,255,0.15); }
+    #admin-btn { display: none; font-size: 15px; }
+    #admin-btn.show { display: flex; }
+    .search-row {
+      display: flex; gap: 8px; margin-bottom: 14px;
+    }
+    .search-row input {
+      flex: 1; padding: 10px 14px; border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.15);
+      background: rgba(255,255,255,0.06); color: #fff; font-size: 14px; outline: none;
+    }
+    .search-row input:focus { border-color: #48dbfb; }
+    .search-row button {
+      padding: 10px 18px; border-radius: 10px; border: none;
+      background: #48dbfb; color: #fff; font-size: 14px; cursor: pointer;
+    }
+    .search-results { max-height: 48vh; overflow-y: auto; }
+    .search-item {
+      padding: 10px 12px; border-radius: 10px; margin-bottom: 8px;
+      background: rgba(255,255,255,0.04); cursor: pointer;
+    }
+    .search-item:hover { background: rgba(255,255,255,0.09); }
+    .search-item .s-meta { font-size: 11px; opacity: 0.5; margin-bottom: 3px; }
+    .search-item .s-body { font-size: 13px; line-height: 1.45; }
+    .report-row {
+      padding: 10px 12px; border-radius: 10px; margin-bottom: 8px;
+      background: rgba(255,107,107,0.06); border: 1px solid rgba(255,107,107,0.15);
+    }
+    .report-row.deleted { opacity: 0.5; }
+    .report-row .r-content { font-size: 13px; margin: 4px 0 6px; line-height: 1.45; }
+    .report-row .r-meta { font-size: 11px; opacity: 0.55; }
+    .report-row .r-actions { display: flex; gap: 8px; margin-top: 8px; }
+    .report-row .r-actions button {
+      padding: 5px 12px; border-radius: 8px; border: none; cursor: pointer; font-size: 12px;
+      background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.85);
+    }
+    .report-row .r-actions button.danger { background: rgba(255,107,107,0.2); color: #ff6b6b; }
+    .pin-btn {
+      padding: 6px 12px; border-radius: 20px;
+      background: rgba(254,202,87,0.12); border: 1px solid rgba(254,202,87,0.4);
+      color: #feca57; font-size: 12px; cursor: pointer;
+    }
+    .pin-btn:hover { background: rgba(254,202,87,0.25); }
     #notif-badge {
       display: none; position: absolute; top: -3px; right: -3px;
       min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px;
@@ -203,6 +252,12 @@
       display: none; align-items: center; justify-content: center;
     }
     #profile-modal.active { display: flex; }
+    #search-modal, #admin-modal {
+      position: fixed; inset: 0; z-index: 200;
+      background: rgba(0,0,0,0.7); backdrop-filter: blur(4px);
+      display: none; align-items: center; justify-content: center;
+    }
+    #search-modal.active, #admin-modal.active { display: flex; }
     #notif-modal {
       position: fixed; inset: 0; z-index: 200;
       background: rgba(0,0,0,0.7); backdrop-filter: blur(4px);
@@ -371,8 +426,36 @@
     </div>
   </div>
 
+  <!-- 搜索弹窗 -->
+  <div id="search-modal">
+    <div class="modal-content" style="max-width:400px;">
+      <div class="modal-header">
+        <h3>搜索留言</h3>
+        <button class="modal-close" onclick="closeSearch()">&times;</button>
+      </div>
+      <div class="search-row">
+        <input type="text" id="search-input" placeholder="输入关键词..." maxlength="50" />
+        <button onclick="doSearch()">搜索</button>
+      </div>
+      <div id="search-results" class="search-results"><div class="notif-empty">输入关键词，找找大家说过什么</div></div>
+    </div>
+  </div>
+
+  <!-- 管理弹窗（举报处理） -->
+  <div id="admin-modal">
+    <div class="modal-content" style="max-width:420px;">
+      <div class="modal-header">
+        <h3>🛡 举报处理</h3>
+        <button class="modal-close" onclick="closeAdmin()">&times;</button>
+      </div>
+      <div id="admin-list" class="search-results"><div class="notif-empty">加载中...</div></div>
+    </div>
+  </div>
+
   <div id="control-bar">
+    <div id="search-btn" onclick="openSearch()">🔍</div>
     <div id="notif-btn" onclick="openNotif()">🔔<span id="notif-badge"></span></div>
+    <div id="admin-btn" onclick="openAdmin()">🛡</div>
     <div id="user-info" onclick="onUserChipClick()">
       <span id="red-dot"></span>
       <span id="user-avatar">?</span>
@@ -526,12 +609,14 @@
         avatar.style.background = currentUser.avatar_color;
         name.textContent = currentUser.nickname;
         notifBtn.classList.add('show');
+        document.getElementById('admin-btn').classList.toggle('show', !!currentUser.is_admin);
         loadNotifCount();
       } else {
         avatar.textContent = '?';
         avatar.style.background = '#555';
         name.textContent = '点击登录';
         notifBtn.classList.remove('show');
+        document.getElementById('admin-btn').classList.remove('show');
         document.getElementById('notif-badge').classList.remove('show');
       }
     }
@@ -961,6 +1046,7 @@
               <button class="vote-btn like ${msg.my_vote==='like'?'active':''}" onclick="vote('message','${id}','like')">👍 <span id="msg-likes">${msg.real_likes||0}</span></button>
               <button class="vote-btn dislike ${msg.my_vote==='dislike'?'active':''}" onclick="vote('message','${id}','dislike')">👎 <span id="msg-dislikes">${msg.real_dislikes||0}</span></button>
               ${msg.mine ? `<button class="del-btn" onclick="deleteMessage('${id}')">🗑 删除</button>` : ''}
+              ${msg.admin ? `<button class="pin-btn" onclick="togglePin('${id}')">${msg.is_pinned ? '📌 取消置顶' : '📌 置顶'}</button>` : ''}
               <button class="report-btn" onclick="reportContent('message','${id}')">⚠ 举报</button>
             </div>
           </div>
@@ -1098,10 +1184,95 @@
       } catch (e) { errEl.textContent = '网络错误，请重试'; }
     }
 
+    // === 搜索 ===
+    function openSearch() {
+      document.getElementById('search-modal').classList.add('active');
+      setTimeout(() => document.getElementById('search-input').focus(), 50);
+    }
+    function closeSearch() { document.getElementById('search-modal').classList.remove('active'); }
+    async function doSearch() {
+      const q = document.getElementById('search-input').value.trim();
+      const box = document.getElementById('search-results');
+      if (!q) return;
+      box.innerHTML = '<div class="notif-empty">搜索中...</div>';
+      try {
+        const res = await fetch(`${API_BASE}/api/messages/search?q=${encodeURIComponent(q)}&limit=30`, { headers: getAuthHeaders() });
+        const data = await res.json();
+        if (!data.success) { box.innerHTML = `<div class="notif-empty">${escapeHtml(data.error || '搜索失败')}</div>`; return; }
+        if (data.data.length === 0) { box.innerHTML = `<div class="notif-empty">没有找到包含「${escapeHtml(q)}」的留言</div>`; return; }
+        box.innerHTML = `<div class="notif-empty" style="padding:4px 0 10px;">共 ${data.pagination.total} 条结果</div>` + data.data.map(m => `
+          <div class="search-item" onclick="openNotifTarget('${m.id}')">
+            <div class="s-meta">${escapeHtml(m.author_name)} · ${formatTime(m.created_at)} · 💬${m.replies_count} 👍${m.real_likes || 0}</div>
+            <div class="s-body">${escapeHtml(m.content)}</div>
+          </div>`).join('');
+      } catch (_) { box.innerHTML = '<div class="notif-empty">网络错误，请重试</div>'; }
+    }
+
+    // === 管理端（举报处理） ===
+    function openAdmin() {
+      document.getElementById('admin-modal').classList.add('active');
+      loadAdminReports();
+    }
+    function closeAdmin() { document.getElementById('admin-modal').classList.remove('active'); }
+    async function loadAdminReports() {
+      const box = document.getElementById('admin-list');
+      box.innerHTML = '<div class="notif-empty">加载中...</div>';
+      try {
+        const res = await fetch(`${API_BASE}/api/admin/reports`, { headers: getAuthHeaders() });
+        const data = await res.json();
+        if (!data.success) { box.innerHTML = `<div class="notif-empty">${escapeHtml(data.error || '加载失败')}</div>`; return; }
+        if (data.data.length === 0) { box.innerHTML = '<div class="notif-empty">暂无举报，世界和平 ✌️</div>'; return; }
+        box.innerHTML = data.data.map(r => `
+          <div class="report-row ${r.target_deleted ? 'deleted' : ''}">
+            <div class="r-meta">${r.target_type === 'message' ? '留言' : '回复'} · 被举报 ${r.report_count} 次 · ${formatTime(r.created_at)}${r.target_deleted ? ' · 已删除' : ''}</div>
+            <div class="r-content">${escapeHtml(r.content || '(内容不存在)')}${r.reason ? `<br>理由：${escapeHtml(r.reason)}` : ''}</div>
+            <div class="r-actions">
+              ${r.target_type === 'message' && !r.target_deleted ? `<button onclick="openNotifTarget('${r.target_id}')">查看</button>` : ''}
+              ${!r.target_deleted ? `<button class="danger" onclick="adminDelete('${r.target_type}','${r.target_id}')">删除内容</button>` : ''}
+            </div>
+          </div>`).join('');
+      } catch (_) { box.innerHTML = '<div class="notif-empty">网络错误，请重试</div>'; }
+    }
+    async function adminDelete(type, id) {
+      if (!confirm('确定删除这条' + (type === 'message' ? '留言（含其回复）' : '回复') + '吗？')) return;
+      try {
+        const res = await fetch(`${API_BASE}/api/${type === 'message' ? 'messages' : 'replies'}/${id}`, {
+          method: 'DELETE', headers: getAuthHeaders(),
+        });
+        const data = await res.json();
+        if (data.success) {
+          showNotice('已删除');
+          loadAdminReports();
+          if (type === 'message') {
+            allMessages = allMessages.filter(m => m.id !== id);
+            displayQueue = displayQueue.filter(m => m.id !== id);
+          }
+          loadStats(true);
+        } else alert(data.error || '删除失败');
+      } catch (_) { alert('网络错误，请重试'); }
+    }
+
+    // 置顶/取消置顶（管理员，详情页内操作）
+    async function togglePin(id) {
+      try {
+        const res = await fetch(`${API_BASE}/api/messages/${id}/pin`, {
+          method: 'POST', headers: getAuthHeaders(),
+        });
+        const data = await res.json();
+        if (data.success) {
+          showNotice(data.data.is_pinned ? '已置顶，列表将优先展示' : '已取消置顶');
+          openDetail(id); // 重开详情刷新按钮态
+        } else alert(data.error || '操作失败');
+      } catch (_) { alert('网络错误，请重试'); }
+    }
+
     document.getElementById('message-input').addEventListener('keypress', e => { if (e.key==='Enter') sendMessage(); });
     document.getElementById('detail-modal').addEventListener('click', e => { if (e.target===document.getElementById('detail-modal')) closeDetail(); });
     document.getElementById('profile-modal').addEventListener('click', e => { if (e.target===document.getElementById('profile-modal')) closeProfile(); });
     document.getElementById('notif-modal').addEventListener('click', e => { if (e.target===document.getElementById('notif-modal')) closeNotif(); });
+    document.getElementById('search-modal').addEventListener('click', e => { if (e.target===document.getElementById('search-modal')) closeSearch(); });
+    document.getElementById('admin-modal').addEventListener('click', e => { if (e.target===document.getElementById('admin-modal')) closeAdmin(); });
+    document.getElementById('search-input').addEventListener('keypress', e => { if (e.key==='Enter') doSearch(); });
     document.getElementById('profile-nickname').addEventListener('input', renderProfileAvatar);
     window.addEventListener('resize', () => { activeBarrages.forEach(b=>b.anim.cancel()); activeBarrages.forEach(b=>b.el.remove()); activeBarrages=[]; });
 

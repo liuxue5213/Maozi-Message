@@ -18,6 +18,13 @@ function getAuthPayload(req) {
   return verifyTokenVersion(payload, row.token_version) ? payload : null;
 }
 
+// 管理员判定（users.is_admin，由 set-admin 脚本授予）
+function isAdminPayload(payload) {
+  if (!payload) return false;
+  const row = db.prepare('SELECT is_admin FROM users WHERE id = ?').get(payload.uid);
+  return !!row && row.is_admin === 1;
+}
+
 // 展示时区（默认东八区）。created_at/expire_at 均以 UTC 存储，
 // "今日" 的日期边界按展示时区换算回 UTC 再查询，避免凌晨时段查错日期。
 const TZ_OFFSET_HOURS = (() => {
@@ -136,6 +143,51 @@ router.get('/messages', (req, res) => {
   }
 });
 
+// 全库搜索留言（须在 /messages/:id 之前注册，避免被吞）
+router.get('/messages/search', (req, res) => {
+  try {
+    const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+    if (!q || q.length > 50) {
+      return res.status(400).json({ success: false, error: '请输入 1 到 50 个字符的关键词' });
+    }
+    const tokenPayload = getAuthPayload(req);
+    const fp = tokenPayload ? tokenPayload.uid : generateFingerprint(req);
+    const safeLimit = Math.max(1, Math.min(parseInt(req.query.limit) || 20, 50));
+    const safeOffset = Math.max(parseInt(req.query.offset) || 0, 0);
+    const like = `%${q.replace(/[\\%_]/g, m => `\\${m}`)}%`;
+
+    const messages = db.prepare(`
+      SELECT m.id, m.content, m.author_name, m.color, m.bg_color, m.mood,
+        m.is_anonymous, m.replies_count, m.created_at, m.expire_at, m.is_pinned,
+        (SELECT COUNT(*) FROM votes WHERE target_type='message' AND target_id=m.id AND vote_type='like') as real_likes,
+        (SELECT COUNT(*) FROM votes WHERE target_type='message' AND target_id=m.id AND vote_type='dislike') as real_dislikes,
+        mv.vote_type as my_vote
+      FROM messages m
+      LEFT JOIN votes mv ON mv.target_type='message' AND mv.target_id=m.id AND mv.user_fingerprint=?
+      WHERE m.deleted_at IS NULL AND m.content LIKE ? ESCAPE '\\'
+        AND (m.expire_at IS NULL OR datetime(m.expire_at) > datetime('now'))
+      ORDER BY m.created_at DESC
+      LIMIT ? OFFSET ?
+    `).all(fp, like, safeLimit, safeOffset);
+
+    const total = db.prepare(`
+      SELECT COUNT(*) as count FROM messages m
+      WHERE m.deleted_at IS NULL AND m.content LIKE ? ESCAPE '\\'
+        AND (m.expire_at IS NULL OR datetime(m.expire_at) > datetime('now'))
+    `).get(like).count;
+
+    res.json({
+      success: true,
+      data: messages.map(m => ({ ...m, replies: [] })),
+      keyword: q,
+      pagination: { limit: safeLimit, offset: safeOffset, total, hasMore: safeOffset + messages.length < total },
+    });
+  } catch (err) {
+    console.error('搜索失败:', err);
+    res.status(500).json({ success: false, error: '搜索失败' });
+  }
+});
+
 // 获取单条留言详情（含回复）
 router.get('/messages/:id', (req, res) => {
   try {
@@ -162,9 +214,10 @@ router.get('/messages/:id', (req, res) => {
     `).get(fp, req.params.id);
 
     if (!msg) return res.status(404).json({ success: false, error: '留言不存在' });
-    // 归属标记：仅登录作者可见删除入口；author_id 本身不外泄
+    // 归属标记：仅登录作者可见删除入口；author_id 本身不外泄。admin 供管理操作（置顶）
     const { __aid, ...msgData } = msg;
     msgData.mine = !!(tokenPayload && __aid === tokenPayload.uid);
+    msgData.admin = isAdminPayload(tokenPayload);
 
     const replies = db.prepare(`
       SELECT r.id, r.message_id, r.content, r.author_name, r.created_at,
@@ -469,7 +522,7 @@ router.delete('/messages/:id', (req, res) => {
     const msg = db.prepare('SELECT author_id FROM messages WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
     if (!msg) return res.status(404).json({ success: false, error: '留言不存在' });
 
-    if (msg.author_id !== tokenPayload.uid) {
+    if (msg.author_id !== tokenPayload.uid && !isAdminPayload(tokenPayload)) {
       return res.status(403).json({ success: false, error: '无权删除此留言' });
     }
 
@@ -484,6 +537,80 @@ router.delete('/messages/:id', (req, res) => {
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, error: '删除失败' });
+  }
+});
+
+// 置顶/取消置顶（管理员）。置顶留言在列表中排在最前
+router.post('/messages/:id/pin', (req, res) => {
+  try {
+    const tokenPayload = getAuthPayload(req);
+    if (!isAdminPayload(tokenPayload)) {
+      return res.status(403).json({ success: false, error: '需要管理员权限' });
+    }
+    const msg = db.prepare('SELECT id, is_pinned FROM messages WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
+    if (!msg) return res.status(404).json({ success: false, error: '留言不存在' });
+
+    const next = msg.is_pinned ? 0 : 1;
+    db.prepare('UPDATE messages SET is_pinned = ? WHERE id = ?').run(next, msg.id);
+    res.json({ success: true, data: { id: msg.id, is_pinned: next } });
+  } catch (err) {
+    console.error('置顶失败:', err);
+    res.status(500).json({ success: false, error: '操作失败' });
+  }
+});
+
+// 删除回复（管理员），并同步留言的回复计数
+router.delete('/replies/:id', (req, res) => {
+  try {
+    const tokenPayload = getAuthPayload(req);
+    if (!isAdminPayload(tokenPayload)) {
+      return res.status(403).json({ success: false, error: '需要管理员权限' });
+    }
+    const reply = db.prepare('SELECT id, message_id FROM replies WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
+    if (!reply) return res.status(404).json({ success: false, error: '回复不存在' });
+
+    const run = db.transaction(() => {
+      db.prepare("UPDATE replies SET deleted_at = datetime('now') WHERE id = ?").run(reply.id);
+      db.prepare('UPDATE messages SET replies_count = MAX(replies_count - 1, 0) WHERE id = ?').run(reply.message_id);
+      db.prepare("DELETE FROM votes WHERE target_type='reply' AND target_id=?").run(reply.id);
+    });
+    run();
+
+    getBroadcast(req)('reply_deleted', { message_id: reply.message_id, id: reply.id });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('删除回复失败:', err);
+    res.status(500).json({ success: false, error: '删除失败' });
+  }
+});
+
+// 举报列表（管理员）：附被举报内容预览与现存状态
+router.get('/admin/reports', (req, res) => {
+  try {
+    const tokenPayload = getAuthPayload(req);
+    if (!isAdminPayload(tokenPayload)) {
+      return res.status(403).json({ success: false, error: '需要管理员权限' });
+    }
+    const items = db.prepare(`
+      SELECT r.id, r.target_type, r.target_id, r.reason, r.created_at,
+        COALESCE(
+          (SELECT content FROM messages WHERE id = r.target_id),
+          (SELECT content FROM replies WHERE id = r.target_id)
+        ) as content,
+        CASE r.target_type
+          WHEN 'message' THEN (SELECT deleted_at FROM messages WHERE id = r.target_id)
+          ELSE (SELECT deleted_at FROM replies WHERE id = r.target_id)
+        END as target_deleted,
+        (SELECT COUNT(*) FROM reports r2 WHERE r2.target_type = r.target_type AND r2.target_id = r.target_id) as report_count
+      FROM reports r
+      GROUP BY r.target_type, r.target_id
+      ORDER BY MAX(r.created_at) DESC
+      LIMIT 100
+    `).all();
+    res.json({ success: true, data: items });
+  } catch (err) {
+    console.error('获取举报列表失败:', err);
+    res.status(500).json({ success: false, error: '加载失败' });
   }
 });
 

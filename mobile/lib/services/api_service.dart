@@ -219,6 +219,23 @@ class ApiService {
     throw Exception(data['error'] ?? '加载失败');
   }
 
+  /// 全库搜索留言
+  static Future<List<Message>> searchMessages(String q, {int limit = 30}) async {
+    final res = await http
+        .get(
+          Uri.parse('$baseUrl/messages/search?q=${Uri.encodeComponent(q)}&limit=$limit'),
+          headers: await _headers(),
+        )
+        .timeout(_timeout);
+    final data = jsonDecode(res.body);
+    if (data['success'] == true) {
+      return (data['data'] as List)
+          .map((m) => Message.fromJson(m))
+          .toList();
+    }
+    throw Exception(data['error'] ?? '搜索失败');
+  }
+
   /// 获取单条留言详情
   static Future<Message> getMessage(String id) async {
     final res = await http.get(

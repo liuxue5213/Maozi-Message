@@ -71,7 +71,7 @@ router.post('/register', (req, res) => {
       success: true,
       data: {
         token,
-        user: { id, username: username.trim(), nickname: nickname.trim(), avatar_color: color },
+        user: { id, username: username.trim(), nickname: nickname.trim(), avatar_color: color, is_admin: 0 },
       },
     });
   } catch (err) {
@@ -106,7 +106,7 @@ router.post('/login', (req, res) => {
       success: true,
       data: {
         token,
-        user: { id: user.id, username: user.username, nickname: user.nickname, avatar_color: user.avatar_color },
+        user: { id: user.id, username: user.username, nickname: user.nickname, avatar_color: user.avatar_color, is_admin: user.is_admin || 0 },
       },
     });
   } catch (err) {
@@ -137,12 +137,13 @@ router.patch('/profile', (req, res) => {
       return res.status(401).json({ success: false, error: '用户不存在' });
     }
 
+    const { is_admin: isAdmin } = db.prepare('SELECT is_admin FROM users WHERE id = ?').get(payload.uid);
     const token = generateToken(payload.uid, payload.usr, nickname.trim(), payload.ver);
     res.json({
       success: true,
       data: {
         token,
-        user: { id: payload.uid, username: payload.usr, nickname: nickname.trim(), avatar_color },
+        user: { id: payload.uid, username: payload.usr, nickname: nickname.trim(), avatar_color, is_admin: isAdmin || 0 },
       },
     });
   } catch (err) {
@@ -181,7 +182,7 @@ router.post('/change-password', (req, res) => {
       success: true,
       data: {
         token,
-        user: { id: user.id, username: user.username, nickname: user.nickname, avatar_color: user.avatar_color },
+        user: { id: user.id, username: user.username, nickname: user.nickname, avatar_color: user.avatar_color, is_admin: user.is_admin || 0 },
       },
     });
   } catch (err) {
@@ -196,11 +197,11 @@ router.get('/me', (req, res) => {
   if (!payload) {
     return res.status(401).json({ success: false, error: '未登录' });
   }
-  const user = db.prepare('SELECT id, username, nickname, avatar_color FROM users WHERE id = ?').get(payload.uid);
+  const user = db.prepare('SELECT id, username, nickname, avatar_color, is_admin FROM users WHERE id = ?').get(payload.uid);
   if (!user) {
     return res.status(401).json({ success: false, error: '用户不存在' });
   }
-  res.json({ success: true, data: user });
+  res.json({ success: true, data: { ...user, is_admin: user.is_admin || 0 } });
 });
 
 module.exports = router;
